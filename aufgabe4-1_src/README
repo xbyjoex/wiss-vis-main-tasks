@@ -1,0 +1,35 @@
+This is the FAnToM toolbox for Aufgabe 4.1: Superquadric Tensor Glyphs & Localized Flow Probe.
+
+The build needs the directory where FAnToM has been installed to. Because of the special precautions that we have taken,
+the build directory of FAnToM can be used directly here, without the need for an installation.
+
+To build the toolbox, run the following commands (assuming the CWD is the toolbox directory)
+  - mkdir build
+  - cd build
+  - FANTOM_DIR=/path/to/FAnToM/install-dir/or/build-dir cmake ../
+  - make
+
+Put all your plugins in subdirectories of the toolbox directory.
+Plugins need a specific directory layout:
+
+toolbox-dir/
+  - CMakeLists.txt   - the main build script
+  - build            - the build dir
+  - plugin1/
+    - FAnToM-Dependencies.txt
+    - algos/
+      - LocalizedFlowProbe.cpp
+      - SuperquadricTensorGlyphs.cpp
+
+If your plugin needs additional external libraries, find them in your CMakeLists.txt, declare them as imported targets,
+list them in the plugin1_LIBS and call FANTOM_ADD_PLUGIN( plugin1 ).
+Dependencies to FAnToM default libraries (DEFAULT/Python, DEFAULT/OpenGL) or FAnToM plugins (e.g., utils/Graphics, utils/math) can be listed
+in the FAnToM-Dependencies.txt directly.
+
+Use
+   make run
+or
+   make debug
+to run/debug your plugin.
+
+When installing the build, the generated plugin libraries and data files are merged directly into the FAnToM directory hierarchy.
