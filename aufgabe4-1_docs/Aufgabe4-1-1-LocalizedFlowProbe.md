@@ -149,8 +149,35 @@ Die Krümmung wird numerisch durch Approximation von `dT/ds` berechnet:
 - **Magnetfelder**: Visualisierung von Feldlinien und Wirbeln
 - **Geschwindigkeitsfelder**: Identifikation von kritischen Punkten
 
+## Offizielle Literatur und Parameterwahl
+
+### Referenzpaper
+
+- **W. C. de Leeuw, J. J. van Wijk:** *A probe for local flow field visualization*, IEEE Visualization, 1993 (IEEE Xplore: 398849).
+- Die Glyphe (gebogene Röhre + Ring für Scherung/Divergenz) folgt diesem Konzept; die genaue geometrische Parametrisierung ist im frei zugänglichen Abstract/Übersichten nicht detailliert beschrieben.
+
+### Was das Paper nicht vorgibt
+
+- Im Volltext (IEEE Paywall) werden konkrete Formeln für **Rohrlänge**, **Ringradius** oder **Skalierung** in den zugänglichen Zusammenfassungen und Zitaten nicht genannt.
+- Verwandte Arbeit (Post et al., *Future Generation Computer Systems* 15, 1999) nutzt bei Stromlinien-Rohren z.B. **Radius ∝ 1/√|v|**, damit starke Strömung dünnere Rohre bekommt; für die lokale Probe-Glyphe gibt es dort keine expliziten Parameter.
+
+### Praktische Parameterwahl (Implementierung)
+
+Ohne feste Vorgaben aus dem Paper werden die Parameter heuristisch und datenabhängig gewählt:
+
+| Parameter | Rolle | Empfehlung |
+|-----------|--------|-------------|
+| **Glyph Scale** | Globale Größe der Glyphe im Weltkoordinatensystem | Ca. 0,1–0,5 × typische Domänenausdehnung; so wählen, dass Glyphen weder verschwinden noch sich stark überlappen. |
+| **Tube Length** | Relative Länge der Stromlinien-Röhre (0,1–1) | 0,2–0,35: kürzere Röhren reduzieren Überlagerung; größere Werte zeigen mehr Verlauf. |
+| **Ring Size** | Radius des Basis-Rings (Scherung/Divergenz) relativ zur Glyphen-Größe | 0,2–0,4: Ring gut sichtbar, aber nicht dominierend. |
+| **Line Width** | Linienstärke in Pixel | 2–4 für bessere Sichtbarkeit. |
+| **Sample Count** (Berechnung) | Anzahl Stützstellen pro Raumrichtung | 5–10: weniger Glyphen = übersichtlicher; mehr = feinere Abdeckung. |
+| **Step Size** (Berechnung) | Schrittweite für numerische Ableitungen | In der Größenordnung der Gitterweite (z. B. 1e-4); nicht zu groß (ungenau), nicht zu klein (Rundungsfehler). |
+
+**Grundprinzip:** Glyphen-Größe und -Dichte so wählen, dass die lokale Struktur (Richtung, Krümmung, Ring-Deformation) erkennbar bleibt und die Szene nicht überladen wirkt. Die Implementierung skaliert die Röhrenlänge bereits mit der lokalen Geschwindigkeitsmagnitude (stärkere Strömung = längere Röhre).
+
 ## Hinweise
 
 - Die Implementierung verwendet uniformes Grid-Sampling. Für adaptives Sampling könnte man die Feldstärke als Dichte-Indikator verwenden.
-- Divergenz und Krümmung werden berechnet, aber aktuell nicht direkt visualisiert (nur gespeichert für zukünftige Erweiterungen).
-- Die Rotation wird als zusätzliche Pfeile visualisiert.
+- Divergenz und Krümmung werden berechnet; Divergenz steuert die Farbgebung, der Gradient (Jakobi-Matrix) die Ring-Verzerrung (Scherung).
+- Die Rotation wird nicht mehr als separate Pfeile gezeichnet; die gebogene Röhre und der Ring kodieren Richtung, Krümmung und lokale Deformation.

@@ -1,5 +1,7 @@
 // JP, 01/2025 - Aufgabe 4.1: Superquadric Tensor Glyphs
 // Tensorfeld-Visualisierung nach Kindlmann (2004) mit Superquadric-Geometrie
+// Getrennte Berechnung (DataAlgorithm) und Visualisierung (VisAlgorithm)
+
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -7,11 +9,15 @@
 #include <fantom/datastructures/DomainFactory.hpp>
 #include <fantom/datastructures/interfaces/Field.hpp>
 #include <fantom/datastructures/domains/Grid.hpp>
+#include <fantom/datastructures/Function.hpp>
+#include <fantom/graphics.hpp>
 #include <fantom/math.hpp>
 #include <fantom/register.hpp>
 #include <fantom-plugins/utils/math/eigenvalues.hpp>
+#include <fantom-plugins/utils/Graphics/HelperFunctions.hpp>
 #include <memory>
 #include <vector>
+#include <limits>
 
 namespace aufgabe4_1
 {
@@ -20,10 +26,9 @@ namespace aufgabe4_1
     namespace
     {
         // Minimum eigenvalue threshold
-        constexpr double kMinEigenvalue = 1e-9;
-        constexpr double kDefaultGamma = 3.0;
+        constexpr double kMinEigenvalue = 1e-12;
+        constexpr double kDefaultGamma = 1.0;
 
-        // Westin metrics structure
         struct WestinMetrics
         {
             double c_l; // Linearität
@@ -31,392 +36,471 @@ namespace aufgabe4_1
             double c_s; // Sphärizität
         };
 
-        // Form parameters for superquadric
         struct FormParameters
         {
             double alpha;
             double beta;
         };
 
-        // Compute Westin metrics from sorted eigenvalues
-        // λ₁ ≥ λ₂ ≥ λ₃ ≥ 0
         WestinMetrics computeWestinMetrics( double lambda1, double lambda2, double lambda3 )
         {
             double sum = lambda1 + lambda2 + lambda3;
-            if( sum < kMinEigenvalue )
-            {
-                // All eigenvalues are zero - return default metrics
-                return { 0.0, 0.0, 1.0 };
-            }
-
-            WestinMetrics m;
-            m.c_l = ( lambda1 - lambda2 ) / sum; // Linearität
-            m.c_p = 2.0 * ( lambda2 - lambda3 ) / sum; // Planarität
-            m.c_s = 3.0 * lambda3 / sum; // Sphärizität
-            return m;
+            if( sum < kMinEigenvalue ) return { 0.0, 0.0, 1.0 };
+            return { ( lambda1 - lambda2 ) / sum, 2.0 * ( lambda2 - lambda3 ) / sum, 3.0 * lambda3 / sum };
         }
 
-        // Compute form parameters α and β from Westin metrics
-        FormParameters computeFormParameters( double c_l, double c_p, double gamma )
+        FormParameters computeFormParameters( double c_l, double c_p, double c_s, double gamma, bool useKindlmann )
         {
-            FormParameters params;
-            if( c_l >= c_p )
+            if( useKindlmann )
             {
-                // Linearer Typ
-                params.alpha = std::pow( 1.0 - c_p, gamma );
-                params.beta = std::pow( 1.0 - c_l, gamma );
+                // Original Kindlmann (2004) Logic
+                // Produces sharp/boxy shapes for anisotropy
+                if( c_l >= c_p ) return { std::pow( 1.0 - c_p, gamma ), std::pow( 1.0 - c_l, gamma ) };
+                return { std::pow( 1.0 - c_l, gamma ), std::pow( 1.0 - c_p, gamma ) };
             }
             else
             {
-                // Planarer Typ
-                params.alpha = std::pow( 1.0 - c_l, gamma );
-                params.beta = std::pow( 1.0 - c_p, gamma );
+                // Round/Ellipsoid Logic (User Preference)
+                // Enforces round cross-section (beta=1)
+                return { std::pow( c_s, gamma ), 1.0 };
             }
-            return params;
         }
 
-        // Signum function
-        inline double sgn( double x )
-        {
-            return x >= 0.0 ? 1.0 : -1.0;
-        }
+        inline double sgn( double x ) { return x >= 0.0 ? 1.0 : -1.0; }
 
-        // Generate a point on the superquadric surface in unit space
-        // θ ∈ [-π, π], φ ∈ [-π/2, π/2]
         Point3 superquadricPoint( double theta, double phi, double alpha, double beta )
         {
-            double cos_phi = std::cos( phi );
-            double sin_phi = std::sin( phi );
-            double cos_theta = std::cos( theta );
-            double sin_theta = std::sin( theta );
-
-            double x = sgn( cos_phi ) * std::pow( std::abs( cos_phi ), alpha ) * 
-                       sgn( cos_theta ) * std::pow( std::abs( cos_theta ), beta );
-            double y = sgn( cos_phi ) * std::pow( std::abs( cos_phi ), alpha ) * 
-                       sgn( sin_theta ) * std::pow( std::abs( sin_theta ), beta );
-            double z = sgn( sin_phi ) * std::pow( std::abs( sin_phi ), alpha );
-
+            double cp = std::cos( phi ), sp = std::sin( phi );
+            double ct = std::cos( theta ), st = std::sin( theta );
+            double x = sgn( cp ) * std::pow( std::abs( cp ), alpha ) * sgn( ct ) * std::pow( std::abs( ct ), beta );
+            double y = sgn( cp ) * std::pow( std::abs( cp ), alpha ) * sgn( st ) * std::pow( std::abs( st ), beta );
+            double z = sgn( sp ) * std::pow( std::abs( sp ), alpha );
             return Point3( x, y, z );
         }
 
-        // Transform a point from unit space to data space
-        // Scales with eigenvalues and rotates into eigenvector basis
-        Point3 transformToDataSpace( const Point3& unitPoint,
-                                     double lambda1,
-                                     double lambda2,
-                                     double lambda3,
-                                     const Vector3& v1,
-                                     const Vector3& v2,
-                                     const Vector3& v3,
-                                     const Point3& center )
+        Vector3 superquadricNormal( double theta, double phi, double alpha, double beta )
         {
-            // Scale with eigenvalues
-            Vector3 scaled( lambda1 * unitPoint[0], lambda2 * unitPoint[1], lambda3 * unitPoint[2] );
-
-            // Rotate into eigenvector basis
-            Vector3 transformed = scaled[0] * v1 + scaled[1] * v2 + scaled[2] * v3;
-
-            // Translate to glyph center
-            return center + transformed;
+            double cp = std::cos( phi ), sp = std::sin( phi );
+            double ct = std::cos( theta ), st = std::sin( theta );
+            double nx = sgn( cp ) * std::pow( std::abs( cp ), 2.0 - alpha ) * sgn( ct ) * std::pow( std::abs( ct ), 2.0 - beta );
+            double ny = sgn( cp ) * std::pow( std::abs( cp ), 2.0 - alpha ) * sgn( st ) * std::pow( std::abs( st ), 2.0 - beta );
+            double nz = sgn( sp ) * std::pow( std::abs( sp ), 2.0 - alpha );
+            return Vector3( nx, ny, nz );
         }
 
-        // Extract real part from complex number, return 0 if imaginary part is significant
         double extractRealEigenvalue( const std::complex< double >& val, double threshold = 1e-9 )
         {
-            if( std::abs( val.imag() ) > threshold )
-            {
-                // Complex eigenvalue - return magnitude as fallback
-                return std::abs( val );
-            }
-            return val.real();
+            return ( std::abs( val.imag() ) > threshold ) ? std::abs( val ) : val.real();
         }
 
-        // Extract real eigenvector from complex eigenvector
         Vector3 extractRealEigenvector( const Tensor< std::complex< double >, 3 >& vec, double threshold = 1e-9 )
         {
-            Vector3 result;
-            for( size_t i = 0; i < 3; ++i )
-            {
-                if( std::abs( vec( i ).imag() ) > threshold )
-                {
-                    // Complex component - use magnitude
-                    result[i] = std::abs( vec( i ) );
-                }
-                else
-                {
-                    result[i] = vec( i ).real();
-                }
-            }
-            return normalized( result );
+            Vector3 res;
+            for( size_t i = 0; i < 3; ++i ) res[i] = ( std::abs( vec( i ).imag() ) > threshold ) ? std::abs( vec( i ) ) : vec( i ).real();
+            return normalized( res );
         }
-    } // namespace
+        
+        PointF<3> toPointF( const Point3& p ) { return PointF<3>( (float)p[0], (float)p[1], (float)p[2] ); }
+        VectorF<3> toVectorF( const Vector3& v ) { return VectorF<3>( (float)v[0], (float)v[1], (float)v[2] ); }
+    }
 
+    // ==========================================================================================
+    // ALGORITHM 1: Calculation (DataAlgorithm)
+    // Generates the Glyph Mesh, Color Field, and Normal Field
+    // ==========================================================================================
     class SuperquadricTensorGlyphs : public DataAlgorithm
     {
     public:
         struct Options : public DataAlgorithm::Options
         {
-            Options( fantom::Options::Control& control )
-                : DataAlgorithm::Options( control )
+            Options( fantom::Options::Control& control ) : DataAlgorithm::Options( control )
             {
-                add< Field< 3, Tensor< double, 3, 3 > > >(
-                    "Tensor Field",
-                    "Tensorfeld für die Superquadric Glyph Visualisierung.",
-                    definedOn< Grid< 3 > >( Grid< 3 >::Points ),
-                    Options::REQUIRED );
-
-                add< double >( "Glyph Scale", "Skalierung der Glyphen.", 1.0 );
-                add< double >( "Sharpness Parameter γ", "Schärfeparameter für Superquadric-Form (Vorschlag: 3.0).", kDefaultGamma );
-                add< int >( "Resolution Theta", "Anzahl der Schritte in θ-Richtung (Auflösung der Superquadric-Oberfläche).", 20 );
-                add< int >( "Resolution Phi", "Anzahl der Schritte in φ-Richtung (Auflösung der Superquadric-Oberfläche).", 20 );
-                add< int >( "Sample Count", "Anzahl der Sampling-Punkte entlang jeder Dimension (für uniformes Grid).", 5 );
-                add< double >( "Time", "Zeitstempel, an dem das Feld evaluiert wird.", 0.0 );
+                add< Field< 3, Matrix< 3 > > >( "Tensor Field", "Input tensor field", Options::REQUIRED );
+                add< double >( "Glyph Scale", "Scaling factor", 1.0 );
+                add< double >( "Sharpness Parameter γ", "Gamma (1.0 = Ellipsoids, >2.0 = Superquadrics)", kDefaultGamma );
+                add< bool >( "Use Kindlmann Shape", "If true, uses original Kindlmann equations (boxier). If false, forces round shapes.", false );
+                add< int >( "Resolution Theta", "Theta resolution", 20 );
+                add< int >( "Resolution Phi", "Phi resolution", 20 );
+                add< int >( "Sample Count", "Grid sampling resolution", 10 );
+                add< double >( "Time", "Evaluation time", 0.0 );
             }
         };
 
         struct DataOutputs : public DataAlgorithm::DataOutputs
         {
-            DataOutputs( fantom::DataOutputs::Control& control )
-                : DataAlgorithm::DataOutputs( control )
+            DataOutputs( fantom::DataOutputs::Control& control ) : DataAlgorithm::DataOutputs( control )
             {
                 add< const Grid< 3 > >( "Glyph Mesh" );
+                add< const Function< Color > >( "Color" );
+                add< const Function< Vector3 > >( "Normals" );
             }
         };
 
-        SuperquadricTensorGlyphs( InitData& data )
-            : DataAlgorithm( data )
-        {
-        }
+        SuperquadricTensorGlyphs( InitData& data ) : DataAlgorithm( data ) {}
 
         void execute( const Algorithm::Options& options, const volatile bool& abortFlag ) override
         {
-            // Get the tensor field from options
-            auto field = options.get< Field< 3, Tensor< double, 3, 3 > > >( "Tensor Field" );
-            auto function = options.get< Function< Tensor< double, 3, 3 > > >( "Tensor Field" );
-
-            if( !field || !function )
-            {
-                warningLog() << "Kein Tensorfeld ausgewählt." << std::endl;
-                clearResult( "Glyph Mesh" );
-                return;
+            debugLog() << "Starting Superquadric Generation..." << std::endl;
+            
+            auto field = options.get< Field< 3, Matrix< 3 > > >( "Tensor Field" );
+            auto function = options.get< Function< Matrix< 3 > > >( "Tensor Field" );
+            if( !field || !function ) { 
+                debugLog() << "Input Tensor Field missing." << std::endl;
+                clearResults(); return; 
             }
 
-            // Check that the field is defined on a 3D grid
             auto grid = std::dynamic_pointer_cast< const Grid< 3 > >( function->domain() );
-            if( !grid )
-            {
-                throw std::logic_error( "Das Tensorfeld ist nicht auf einem 3D-Gitter definiert." );
-            }
+            if( !grid ) throw std::logic_error( "Tensor field not on a 3D grid." );
 
-            // Create evaluator
+            debugLog() << "Input Grid has " << grid->points().size() << " points." << std::endl;
+
             auto evaluator = field->makeEvaluator();
-            if( !evaluator )
-            {
-                warningLog() << "Tensorfeld liefert keinen Evaluator." << std::endl;
-                clearResult( "Glyph Mesh" );
-                return;
-            }
+            if( !evaluator ) { clearResults(); return; }
 
-            // Get parameters
             double time = options.get< double >( "Time" );
             double glyphScale = options.get< double >( "Glyph Scale" );
             double gamma = options.get< double >( "Sharpness Parameter γ" );
-            int resolutionTheta = std::max( 4, options.get< int >( "Resolution Theta" ) );
-            int resolutionPhi = std::max( 4, options.get< int >( "Resolution Phi" ) );
+            bool useKindlmann = options.get< bool >( "Use Kindlmann Shape" );
+            int resTheta = std::max( 4, options.get< int >( "Resolution Theta" ) );
+            int resPhi = std::max( 4, options.get< int >( "Resolution Phi" ) );
             int sampleCount = std::max( 1, options.get< int >( "Sample Count" ) );
 
-            // Find the bounding box of the grid
+            debugLog() << "Parameters:" << std::endl;
+            debugLog() << "  Time: " << time << std::endl;
+            debugLog() << "  Glyph Scale: " << glyphScale << std::endl;
+            debugLog() << "  Sharpness Gamma: " << gamma << std::endl;
+            debugLog() << "  Use Kindlmann: " << (useKindlmann ? "Yes" : "No") << std::endl;
+            debugLog() << "  Res Theta: " << resTheta << std::endl;
+            debugLog() << "  Res Phi: " << resPhi << std::endl;
+            debugLog() << "  Sample Count: " << sampleCount << std::endl;
+
+            // Bounding Box & Sampling
             const auto& gridPoints = grid->points();
-            Point3 gridMin, gridMax;
-            if( gridPoints.size() > 0 )
-            {
-                gridMin = gridPoints[0];
-                gridMax = gridPoints[0];
-                for( size_t i = 1; i < gridPoints.size(); ++i )
-                {
-                    const auto& p = gridPoints[i];
-                    for( size_t d = 0; d < 3; ++d )
-                    {
-                        gridMin[d] = std::min( gridMin[d], p[d] );
-                        gridMax[d] = std::max( gridMax[d], p[d] );
-                    }
+            if( gridPoints.size() == 0 ) { clearResults(); return; }
+            Point3 gridMin = gridPoints[0], gridMax = gridPoints[0];
+            for( size_t i = 1; i < gridPoints.size(); ++i )
+                for( int d = 0; d < 3; ++d ) {
+                    gridMin[d] = std::min( gridMin[d], gridPoints[i][d] );
+                    gridMax[d] = std::max( gridMax[d], gridPoints[i][d] );
                 }
-            }
-            else
-            {
-                warningLog() << "Grid hat keine Punkte." << std::endl;
-                clearResult( "Glyph Mesh" );
-                return;
-            }
+            
+            debugLog() << "Grid Bounds: [" << gridMin << "] to [" << gridMax << "]" << std::endl;
 
-            // Generate sampling points (uniform grid)
-            std::vector< Point3 > samplePoints;
             Vector3 gridSize = gridMax - gridMin;
-            double spacing = std::min( { gridSize[0], gridSize[1], gridSize[2] } ) / static_cast< double >( sampleCount + 1 );
+            double maxDim = std::max( { gridSize[0], gridSize[1], gridSize[2] } );
+            double spacing = maxDim / static_cast< double >( sampleCount + 1 );
+            int countX = ( gridSize[0] < 1e-6 ) ? 0 : sampleCount;
+            int countY = ( gridSize[1] < 1e-6 ) ? 0 : sampleCount;
+            int countZ = ( gridSize[2] < 1e-6 ) ? 0 : sampleCount;
 
-            for( int i = 0; i <= sampleCount; ++i )
+            std::vector< Point3 > samplePoints;
+            for( int i = 0; i <= countX; ++i )
+                for( int j = 0; j <= countY; ++j )
+                    for( int k = 0; k <= countZ; ++k )
+                        samplePoints.push_back( gridMin + Vector3( i*spacing, j*spacing, k*spacing ) );
+
+            // Buffers
+            std::vector< Point3 > vertices;
+            std::vector< Color > colors;
+            std::vector< Vector3 > normals;
+            std::vector< size_t > indices;
+            
+            size_t validTensors = 0;
+            size_t skippedTensors = 0;
+
+            double minEval = std::numeric_limits<double>::max();
+            double maxEval = std::numeric_limits<double>::lowest();
+
+            Algorithm::Progress progress( *this, "Generating Glyphs", samplePoints.size() );
+
+            for( size_t i = 0; i < samplePoints.size(); ++i )
             {
-                for( int j = 0; j <= sampleCount; ++j )
-                {
-                    for( int k = 0; k <= sampleCount; ++k )
-                    {
-                        Point3 p( gridMin[0] + ( i * spacing ),
-                                  gridMin[1] + ( j * spacing ),
-                                  gridMin[2] + ( k * spacing ) );
-                        samplePoints.push_back( p );
-                    }
-                }
-            }
+                progress = i;
+                const auto& p = samplePoints[i];
 
-            // Storage for mesh data
-            std::vector< Point3 > allVertices;
-            std::vector< std::vector< size_t > > allTriangles;
+                if( abortFlag ) break;
+                evaluator->reset( p, time );
+                if( !*evaluator ) continue;
 
-            // Process each sample point
-            for( const auto& samplePoint : samplePoints )
-            {
-                if( abortFlag )
-                {
-                    break;
-                }
-
-                // Check if point is in domain
-                evaluator->reset( samplePoint, time );
-                if( !*evaluator )
-                {
-                    continue; // Skip points outside domain
-                }
-
-                // Get tensor at this point
-                Tensor< double, 3, 3 > tensor = evaluator->value();
-
-                // Compute eigensystem
+                Matrix< 3 > val = evaluator->value();
+                Tensor< double, 3, 3 > tensor( val );
                 auto eigensystem = fantom::math::getEigensystem< 3 >( tensor );
-                const auto& eigenvalues = eigensystem.first;
-                const auto& eigenvectors = eigensystem.second;
-
-                if( eigenvalues.size() < 3 || eigenvectors.size() < 3 )
+                
+                // Extract eigenvalues and eigenvectors
+                std::vector< std::pair< double, Vector3 > > eigenPairs( 3 );
+                for( int i = 0; i < 3; ++i )
                 {
-                    continue; // Skip if eigensystem computation failed
+                    eigenPairs[i].first = extractRealEigenvalue( eigensystem.first[i] );
+                    eigenPairs[i].second = extractRealEigenvector( eigensystem.second[i] );
                 }
 
-                // Extract real eigenvalues (sorted: λ₁ ≥ λ₂ ≥ λ₃)
-                double lambda1 = extractRealEigenvalue( eigenvalues[0] );
-                double lambda2 = extractRealEigenvalue( eigenvalues[1] );
-                double lambda3 = extractRealEigenvalue( eigenvalues[2] );
+                // Sort by eigenvalue (descending)
+                std::sort( eigenPairs.begin(), eigenPairs.end(), []( const auto& a, const auto& b ) {
+                    return a.first > b.first;
+                } );
 
-                // Ensure non-negative eigenvalues
-                lambda1 = std::max( 0.0, lambda1 );
-                lambda2 = std::max( 0.0, lambda2 );
-                lambda3 = std::max( 0.0, lambda3 );
+                double l1 = std::max( 0.0, eigenPairs[0].first );
+                double l2 = std::max( 0.0, eigenPairs[1].first );
+                double l3 = std::max( 0.0, eigenPairs[2].first );
+                
+                minEval = std::min( minEval, l3 );
+                maxEval = std::max( maxEval, l1 );
 
-                // Sort to ensure λ₁ ≥ λ₂ ≥ λ₃
-                if( lambda1 < lambda2 )
-                    std::swap( lambda1, lambda2 );
-                if( lambda2 < lambda3 )
-                    std::swap( lambda2, lambda3 );
-                if( lambda1 < lambda2 )
-                    std::swap( lambda1, lambda2 );
-
-                // Skip if all eigenvalues are zero
-                if( lambda1 < kMinEigenvalue )
-                {
+                if( l1 < kMinEigenvalue ) {
+                    skippedTensors++;
                     continue;
                 }
+                validTensors++;
 
-                // Extract real eigenvectors
-                Vector3 v1 = extractRealEigenvector( eigenvectors[0] );
-                Vector3 v2 = extractRealEigenvector( eigenvectors[1] );
-                Vector3 v3 = extractRealEigenvector( eigenvectors[2] );
+                Vector3 v1 = eigenPairs[0].second;
+                Vector3 v2 = eigenPairs[1].second;
+                Vector3 v3 = eigenPairs[2].second;
 
-                // Ensure orthonormal basis (Gram-Schmidt if needed)
+                // Fix eigenvector handedness (ensure right-handed system)
+                // v3 should be v1 x v2
+                // But eigenvectors are unique up to sign. 
+                // We enforce a consistent frame:
                 v1 = normalized( v1 );
-                v2 = normalized( v2 - ( v2 * v1 ) * v1 );
+                v2 = normalized( v2 - ( v2 * v1 ) * v1 ); // Gram-Schmidt to ensure orthogonality
                 v3 = normalized( cross( v1, v2 ) );
 
-                // Compute Westin metrics
-                WestinMetrics metrics = computeWestinMetrics( lambda1, lambda2, lambda3 );
+                WestinMetrics m = computeWestinMetrics( l1, l2, l3 );
+                FormParameters fp = computeFormParameters( m.c_l, m.c_p, m.c_s, gamma, useKindlmann );
+                Color glyphColor( std::abs( v1[0] ), std::abs( v1[1] ), std::abs( v1[2] ), 1.0f );
 
-                // Compute form parameters
-                FormParameters formParams = computeFormParameters( metrics.c_l, metrics.c_p, gamma );
+                size_t baseIndex = vertices.size();
 
-                // Generate superquadric surface
-                size_t vertexOffset = allVertices.size();
-                std::vector< std::vector< size_t > > glyphTriangles;
-
-                // Generate vertices
-                for( int i = 0; i <= resolutionTheta; ++i )
+                for( int i = 0; i <= resTheta; ++i )
                 {
-                    double theta = -M_PI + ( 2.0 * M_PI * i ) / resolutionTheta;
-                    for( int j = 0; j <= resolutionPhi; ++j )
+                    double theta = -M_PI + ( 2.0 * M_PI * i ) / resTheta;
+                    for( int j = 0; j <= resPhi; ++j )
                     {
-                        double phi = -M_PI / 2.0 + ( M_PI * j ) / resolutionPhi;
+                        double phi = -M_PI / 2.0 + ( M_PI * j ) / resPhi;
 
-                        // Generate point in unit space
-                        Point3 unitPoint = superquadricPoint( theta, phi, formParams.alpha, formParams.beta );
+                        Point3 unitPos = superquadricPoint( theta, phi, fp.alpha, fp.beta );
+                        Vector3 unitNorm = superquadricNormal( theta, phi, fp.alpha, fp.beta );
+                        unitNorm = normalized( unitNorm );
 
-                        // Transform to data space
-                        Point3 dataPoint = transformToDataSpace( unitPoint,
-                                                                glyphScale * lambda1,
-                                                                glyphScale * lambda2,
-                                                                glyphScale * lambda3,
-                                                                v1,
-                                                                v2,
-                                                                v3,
-                                                                samplePoint );
+                        // Align l1 with Z (Superquadric main axis), l2 with X, l3 with Y
+                        Vector3 scaledPos( l2 * unitPos[0], l3 * unitPos[1], l1 * unitPos[2] );
+                        Vector3 scaledNorm( 
+                            ( l2 > 1e-9 ) ? unitNorm[0] / l2 : unitNorm[0],
+                            ( l3 > 1e-9 ) ? unitNorm[1] / l3 : unitNorm[1],
+                            ( l1 > 1e-9 ) ? unitNorm[2] / l1 : unitNorm[2]
+                        );
 
-                        allVertices.push_back( dataPoint );
+                        // Rotate: X->v2, Y->v3, Z->v1
+                        Vector3 rotPos = scaledPos[0] * v2 + scaledPos[1] * v3 + scaledPos[2] * v1;
+                        Vector3 rotNorm = scaledNorm[0] * v2 + scaledNorm[1] * v3 + scaledNorm[2] * v1;
+
+                        vertices.push_back( p + glyphScale * rotPos );
+                        normals.push_back( normalized( rotNorm ) );
+                        colors.push_back( glyphColor );
                     }
                 }
 
-                // Generate triangles (quads split into two triangles)
-                for( int i = 0; i < resolutionTheta; ++i )
+                for( int i = 0; i < resTheta; ++i )
                 {
-                    for( int j = 0; j < resolutionPhi; ++j )
+                    for( int j = 0; j < resPhi; ++j )
                     {
-                        size_t idx00 = vertexOffset + i * ( resolutionPhi + 1 ) + j;
-                        size_t idx01 = vertexOffset + i * ( resolutionPhi + 1 ) + ( j + 1 );
-                        size_t idx10 = vertexOffset + ( i + 1 ) * ( resolutionPhi + 1 ) + j;
-                        size_t idx11 = vertexOffset + ( i + 1 ) * ( resolutionPhi + 1 ) + ( j + 1 );
+                        size_t i00 = baseIndex + i * ( resPhi + 1 ) + j;
+                        size_t i01 = baseIndex + i * ( resPhi + 1 ) + ( j + 1 );
+                        size_t i10 = baseIndex + ( i + 1 ) * ( resPhi + 1 ) + j;
+                        size_t i11 = baseIndex + ( i + 1 ) * ( resPhi + 1 ) + ( j + 1 );
 
-                        // First triangle
-                        allTriangles.push_back( { idx00, idx01, idx10 } );
-
-                        // Second triangle
-                        allTriangles.push_back( { idx01, idx11, idx10 } );
+                        indices.push_back( i00 ); indices.push_back( i01 ); indices.push_back( i10 );
+                        indices.push_back( i01 ); indices.push_back( i11 ); indices.push_back( i10 );
                     }
                 }
             }
 
-            // Create unstructured grid
-            if( !allVertices.empty() && !allTriangles.empty() )
+            debugLog() << "Eigenvalue Range: Min=" << minEval << ", Max=" << maxEval << std::endl;
+            
+            // Size Check
+            double maxGlyphRadius = maxEval * glyphScale;
+            double sizeRatio = maxGlyphRadius / spacing;
+            debugLog() << "Glyph Size Info: Max Radius=" << maxGlyphRadius << ", Grid Spacing=" << spacing << " (Ratio=" << sizeRatio << ")" << std::endl;
+            
+            if( sizeRatio < 0.05 )
             {
-                // Convert triangles to cell format
-                std::vector< Point3 > points = allVertices;
-                std::vector< size_t > cellIndices;
-                size_t triangleCount = allTriangles.size();
-
-                for( const auto& triangle : allTriangles )
-                {
-                    cellIndices.push_back( triangle[0] );
-                    cellIndices.push_back( triangle[1] );
-                    cellIndices.push_back( triangle[2] );
-                }
-
-                // Create cell counts structure
-                std::pair< Cell::Type, size_t > cellCounts[] = { { Cell::TRIANGLE, triangleCount } };
-
-                auto mesh = DomainFactory::makeGrid< 3 >( std::move( points ), 1, cellCounts, std::move( cellIndices ) );
-                setResult( "Glyph Mesh", mesh );
+                debugLog() << "WARNING: Glyphs are very small (< 5% of spacing). They might be invisible!" << std::endl;
+                debugLog() << "SUGGESTION: Increase 'Glyph Scale' to approx " << ( spacing * 0.5 / maxEval ) << "." << std::endl;
             }
-            else
+            else if( sizeRatio > 1.0 )
             {
-                clearResult( "Glyph Mesh" );
+                debugLog() << "WARNING: Glyphs are larger than spacing. They might overlap significantly." << std::endl;
             }
+
+            debugLog() << "Processed Tensors: " << validTensors << " valid, " << skippedTensors << " skipped (too small)." << std::endl;
+            debugLog() << "Generated Mesh: " << vertices.size() << " vertices, " << indices.size() / 3 << " triangles." << std::endl;
+
+            if( vertices.empty() ) { 
+                debugLog() << "No vertices generated!" << std::endl;
+                clearResults(); return; 
+            }
+
+            // Create Grid
+            std::pair< Cell::Type, size_t > cellCounts[] = { { Cell::TRIANGLE, indices.size() / 3 } };
+            auto mesh = DomainFactory::makeGrid< 3 >( std::move( vertices ), 1, cellCounts, std::move( indices ) );
+            setResult( "Glyph Mesh", mesh );
+
+            // Create Functions
+            setResult( "Color", fantom::addData( mesh, Grid< 3 >::Points, colors ) );
+            setResult( "Normals", fantom::addData( mesh, Grid< 3 >::Points, normals ) );
         }
     };
 
     AlgorithmRegister< SuperquadricTensorGlyphs > registerGlyphs(
-        "Aufgabe4-1/2 Superquadric Tensor Glyphs",
-        "Tensorfeld-Visualisierung mit Superquadric-Glyphen nach Kindlmann (2004)." );
+        "Aufgabe4-1/2 Superquadric Generation",
+        "Berechnet Superquadric-Glyphen Geometrie, Farbe und Normalen." );
+
+
+    // ==========================================================================================
+    // ALGORITHM 2: Visualization (VisAlgorithm)
+    // Renders the Glyphs using the Mesh, Color, and Normals
+    // ==========================================================================================
+    class SuperquadricGlyphRenderer : public VisAlgorithm
+    {
+    public:
+        struct Options : public VisAlgorithm::Options
+        {
+            Options( fantom::Options::Control& control ) : VisAlgorithm::Options( control )
+            {
+                add< Grid< 3 > >( "Grid", "The glyph mesh", Options::REQUIRED );
+                add< Function< Color > >( "Color", "Color field" );
+                add< Function< Vector3 > >( "Normals", "Normal field (analytic)" );
+            }
+        };
+
+        struct VisOutputs : public VisAlgorithm::VisOutputs
+        {
+            VisOutputs( fantom::VisOutputs::Control& control ) : VisAlgorithm::VisOutputs( control )
+            {
+                addGraphics( "Glyphs" );
+            }
+        };
+
+        SuperquadricGlyphRenderer( InitData& data ) : VisAlgorithm( data ) {}
+
+        void execute( const Algorithm::Options& options, const volatile bool& abortFlag ) override
+        {
+            debugLog() << "Starting Superquadric Rendering..." << std::endl;
+            auto grid = options.get< Grid< 3 > >( "Grid" );
+            if( !grid ) { 
+                debugLog() << "No Grid input connected." << std::endl;
+                clearGraphics( "Glyphs" ); return; 
+            }
+
+            std::vector< PointF< 3 > > vertices;
+            std::vector< VectorF< 3 > > normals;
+            std::vector< Color > colors;
+            std::vector< unsigned int > indices;
+
+            // Vertices
+            const auto& pts = grid->points();
+            debugLog() << "Input Grid points: " << pts.size() << std::endl;
+            vertices.reserve( pts.size() );
+            for( size_t i = 0; i < pts.size(); ++i ) vertices.push_back( toPointF( pts[i] ) );
+
+            // Normals
+            auto normalFunc = options.get< Function< Vector3 > >( "Normals" );
+            if( normalFunc )
+            {
+                debugLog() << "Using provided analytic normals (" << normalFunc->values().size() << ")." << std::endl;
+                // Use provided analytic normals
+                normals.reserve( normalFunc->values().size() );
+                for( size_t i = 0; i < normalFunc->values().size(); ++i ) 
+                    normals.push_back( toVectorF( normalFunc->values()[i] ) );
+            }
+            else
+            {
+                debugLog() << "No normals provided. Using default up vector (Fallback)." << std::endl;
+                // Fallback: Default up
+                normals.resize( pts.size(), VectorF<3>(0,0,1) ); 
+                // Note: Better fallback would be computing mesh normals, but we expect analytic ones here.
+            }
+
+            // Colors
+            auto colorFunc = options.get< Function< Color > >( "Color" );
+            if( colorFunc )
+            {
+                debugLog() << "Using provided colors (" << colorFunc->values().size() << ")." << std::endl;
+                colors.reserve( colorFunc->values().size() );
+                for( size_t i = 0; i < colorFunc->values().size(); ++i )
+                    colors.push_back( colorFunc->values()[i] );
+            }
+            else
+            {
+                debugLog() << "No colors provided. Using default grey." << std::endl;
+                colors.resize( pts.size(), Color(0.8, 0.8, 0.8, 1.0) );
+            }
+
+            // Indices
+            const auto& cells = grid->cells();
+            indices.reserve( cells.size() * 3 );
+            for( size_t i = 0; i < cells.size(); ++i )
+            {
+                auto cell = cells[i];
+                if( cell.type() == Cell::TRIANGLE )
+                {
+                    indices.push_back( (unsigned int)cell.index( 0 ) );
+                    indices.push_back( (unsigned int)cell.index( 1 ) );
+                    indices.push_back( (unsigned int)cell.index( 2 ) );
+                }
+            }
+
+            if( vertices.empty() ) { clearGraphics( "Glyphs" ); return; }
+
+            // Compute Bounding Box of Vertices
+            PointF<3> minVert = vertices[0];
+            PointF<3> maxVert = vertices[0];
+            for( const auto& v : vertices ) {
+                for( int d=0; d<3; ++d ) {
+                    minVert[d] = std::min( minVert[d], v[d] );
+                    maxVert[d] = std::max( maxVert[d], v[d] );
+                }
+            }
+            debugLog() << "Vertex Bounds: Min=[" << minVert << "], Max=[" << maxVert << "]" << std::endl;
+
+            // Render
+            auto const& system = graphics::GraphicsSystem::instance();
+            std::string resourcePath = PluginRegistrationService::getInstance().getResourcePath( "utils/Graphics" );
+            if( !resourcePath.empty() && resourcePath.back() != '/' ) resourcePath += "/";
+
+            debugLog() << "Loading shaders from: " << resourcePath << "shader/surface/phong/multiColor/" << std::endl;
+
+            auto program = system.makeProgramFromFiles(
+                resourcePath + "shader/surface/phong/multiColor/vertex.glsl",
+                resourcePath + "shader/surface/phong/multiColor/fragment.glsl"
+            );
+
+            if( !program )
+            {
+                debugLog() << "Failed to create shader program!" << std::endl;
+                clearGraphics( "Glyphs" );
+                return;
+            }
+
+            auto bs = graphics::computeBoundingSphere( vertices );
+            debugLog() << "Computed Bounding Sphere: Center=[" << bs.center() << "], Radius=" << bs.radius() << std::endl;
+            
+            auto drawable = system.makePrimitive(
+                graphics::PrimitiveConfig{ graphics::RenderPrimitives::TRIANGLES }
+                    .vertexBuffer( "position", system.makeBuffer( vertices ) )
+                    .vertexBuffer( "normal", system.makeBuffer( normals ) )
+                    .vertexBuffer( "color", system.makeBuffer( colors ) )
+                    .indexBuffer( system.makeIndexBuffer( indices ) )
+                    .boundingSphere( bs ),
+                program
+            );
+
+            setGraphics( "Glyphs", drawable );
+            debugLog() << "Graphics set. Drawing " << indices.size() / 3 << " triangles." << std::endl;
+        }
+    };
+
+    AlgorithmRegister< SuperquadricGlyphRenderer > registerGlyphRenderer(
+        "Aufgabe4-1/3 Superquadric Rendering",
+        "Visualisiert die Superquadric-Glyphen mit analytischen Normalen." );
+
 } // namespace aufgabe4_1
