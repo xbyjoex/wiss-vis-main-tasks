@@ -34,6 +34,7 @@ namespace aufgabe4_1
             double beta;
         };
 
+        // Westin metrics: three numbers in [0,1] that describe linear/planar/spherical anisotropy of the tensor.
         WestinMetrics computeWestinMetrics( double lambda1, double lambda2, double lambda3 )
         {
             double sum = lambda1 + lambda2 + lambda3;
@@ -41,6 +42,7 @@ namespace aufgabe4_1
             return { ( lambda1 - lambda2 ) / sum, 2.0 * ( lambda2 - lambda3 ) / sum, 3.0 * lambda3 / sum };
         }
 
+        // Alpha and beta control shape (cylinder vs disc vs sphere). Kindlmann: from Westin; else round cross-section.
         FormParameters computeFormParameters( double c_l, double c_p, double c_s, double gamma, bool useKindlmann )
         {
             if( useKindlmann )
@@ -53,6 +55,7 @@ namespace aufgabe4_1
 
         inline double sgn( double x ) { return x >= 0.0 ? 1.0 : -1.0; }
 
+        // One point on the unit superquadric surface (theta, phi = angles; alpha, beta = shape exponents).
         Point3 superquadricPoint( double theta, double phi, double alpha, double beta )
         {
             double cp = std::cos( phi ), sp = std::sin( phi );
@@ -63,6 +66,7 @@ namespace aufgabe4_1
             return Point3( x, y, z );
         }
 
+        // Outward normal at that point (for lighting).
         Vector3 superquadricNormal( double theta, double phi, double alpha, double beta )
         {
             double cp = std::cos( phi ), sp = std::sin( phi );
@@ -73,6 +77,7 @@ namespace aufgabe4_1
             return Vector3( nx, ny, nz );
         }
 
+        // Eigen solver can return complex numbers; for symmetric tensors we take the real part (or magnitude).
         double extractRealEigenvalue( const std::complex< double >& val, double threshold = 1e-9 )
         {
             return ( std::abs( val.imag() ) > threshold ) ? std::abs( val ) : val.real();
@@ -124,7 +129,8 @@ namespace aufgabe4_1
         void execute( const Algorithm::Options& options, const volatile bool& abortFlag ) override
         {
             debugLog() << "Starting Superquadric Generation..." << std::endl;
-            
+
+            // Input: a 3x3 tensor at each point (e.g. diffusion tensor or stress).
             auto field = options.get< Field< 3, Matrix< 3 > > >( "Tensor Field" );
             auto function = options.get< Function< Matrix< 3 > > >( "Tensor Field" );
             if( !field || !function ) { 
@@ -137,6 +143,7 @@ namespace aufgabe4_1
 
             debugLog() << "Input Grid has " << grid->points().size() << " points." << std::endl;
 
+            // Evaluator gives us the tensor at any point.
             auto evaluator = field->makeEvaluator();
             if( !evaluator ) { clearResults(); return; }
 
@@ -173,6 +180,7 @@ namespace aufgabe4_1
             
             debugLog() << "Grid Bounds: [" << gridMin << "] to [" << gridMax << "]" << std::endl;
 
+            // Spacing and sample counts per dimension (0 if domain is degenerate in that axis).
             Vector3 gridSize = gridMax - gridMin;
             double maxDim = std::max( { gridSize[0], gridSize[1], gridSize[2] } );
             double spacing = maxDim / static_cast< double >( sampleCount + 1 );
@@ -180,18 +188,19 @@ namespace aufgabe4_1
             int countY = ( gridSize[1] < 1e-6 ) ? 0 : sampleCount;
             int countZ = ( gridSize[2] < 1e-6 ) ? 0 : sampleCount;
 
+            // Fill (countX+1)×(countY+1)×(countZ+1) sample positions.
             std::vector< Point3 > samplePoints;
             for( int i = 0; i <= countX; ++i )
                 for( int j = 0; j <= countY; ++j )
                     for( int k = 0; k <= countZ; ++k )
                         samplePoints.push_back( gridMin + Vector3( i*spacing, j*spacing, k*spacing ) );
 
-            // Buffers
+            // We will append one mesh per glyph: vertices, normals, colors, and triangle indices.
             std::vector< Point3 > vertices;
             std::vector< Color > colors;
             std::vector< Vector3 > normals;
             std::vector< size_t > indices;
-            
+
             size_t validTensors = 0;
             size_t skippedTensors = 0;
 
@@ -209,11 +218,12 @@ namespace aufgabe4_1
                 evaluator->reset( p, time );
                 if( !*evaluator ) continue;
 
+                // Tensor at this point. We need its eigenvalues (sizes) and eigenvectors (directions).
                 Matrix< 3 > val = evaluator->value();
                 Tensor< double, 3, 3 > tensor( val );
                 auto eigensystem = fantom::math::getEigensystem< 3 >( tensor );
-                
-                // Extract eigenvalues and eigenvectors
+
+                // Get real eigenvalues and eigenvectors; sort by eigenvalue (largest first).
                 std::vector< std::pair< double, Vector3 > > eigenPairs( 3 );
                 for( int i = 0; i < 3; ++i )
                 {
@@ -229,10 +239,11 @@ namespace aufgabe4_1
                 double l1 = std::max( 0.0, eigenPairs[0].first );
                 double l2 = std::max( 0.0, eigenPairs[1].first );
                 double l3 = std::max( 0.0, eigenPairs[2].first );
-                
+
                 minEval = std::min( minEval, l3 );
                 maxEval = std::max( maxEval, l1 );
 
+                // Skip degenerate tensors (all eigenvalues near zero).
                 if( l1 < kMinEigenvalue ) {
                     skippedTensors++;
                     continue;
@@ -243,15 +254,17 @@ namespace aufgabe4_1
                 Vector3 v2 = eigenPairs[1].second;
                 Vector3 v3 = eigenPairs[2].second;
 
-                // Right-handed frame
+                // Build orthonormal frame (v1 = main direction; v2, v3 perpendicular; right-handed).
                 v1 = normalized( v1 );
                 v2 = normalized( v2 - ( v2 * v1 ) * v1 ); // Gram-Schmidt to ensure orthogonality
                 v3 = normalized( cross( v1, v2 ) );
 
+                // Shape parameters from Kindlmann paper (alpha, beta) and color from main direction.
                 WestinMetrics m = computeWestinMetrics( l1, l2, l3 );
                 FormParameters fp = computeFormParameters( m.c_l, m.c_p, m.c_s, gamma, useKindlmann );
                 Color glyphColor( std::abs( v1[0] ), std::abs( v1[1] ), std::abs( v1[2] ), 1.0f );
 
+                // Optional: scale this glyph so it fits in its cell (no overlap with neighbors).
                 double scaleFactor = 1.0;
                 if( normalizeToCell && l1 >= kMinEigenvalue && spacing > 1e-12 )
                 {
@@ -261,6 +274,7 @@ namespace aufgabe4_1
 
                 size_t baseIndex = vertices.size();
 
+                // Sample the unit superquadric with theta/phi; scale by l1,l2,l3; rotate to eigenframe. Each sample = one vertex + normal + color.
                 for( int i = 0; i <= resTheta; ++i )
                 {
                     double theta = -M_PI + ( 2.0 * M_PI * i ) / resTheta;
@@ -290,6 +304,7 @@ namespace aufgabe4_1
                     }
                 }
 
+                // Connect the vertex grid into triangles (each quad becomes two triangles).
                 for( int i = 0; i < resTheta; ++i )
                 {
                     for( int j = 0; j < resPhi; ++j )
@@ -325,17 +340,17 @@ namespace aufgabe4_1
             debugLog() << "Processed Tensors: " << validTensors << " valid, " << skippedTensors << " skipped (too small)." << std::endl;
             debugLog() << "Generated Mesh: " << vertices.size() << " vertices, " << indices.size() / 3 << " triangles." << std::endl;
 
-            if( vertices.empty() ) { 
+            if( vertices.empty() ) {
                 debugLog() << "No vertices generated!" << std::endl;
-                clearResults(); return; 
+                clearResults(); return;
             }
 
-            // Create Grid
+            // Package vertices and indices as a single grid (mesh) for the renderer.
             std::pair< Cell::Type, size_t > cellCounts[] = { { Cell::TRIANGLE, indices.size() / 3 } };
             auto mesh = DomainFactory::makeGrid< 3 >( std::move( vertices ), 1, cellCounts, std::move( indices ) );
             setResult( "Glyph Mesh", mesh );
 
-            // Create Functions
+            // Attach per-vertex color and normal to the mesh so the renderer can shade it.
             setResult( "Color", fantom::addData( mesh, Grid< 3 >::Points, colors ) );
             setResult( "Normals", fantom::addData( mesh, Grid< 3 >::Points, normals ) );
         }
@@ -373,6 +388,7 @@ namespace aufgabe4_1
         {
             (void)abortFlag;
             debugLog() << "Starting Superquadric Rendering..." << std::endl;
+            // Input: the mesh (vertices + triangles) produced by the Superquadric Generation algorithm.
             auto grid = options.get< Grid< 3 > >( "Grid" );
             if( !grid ) { 
                 debugLog() << "No Grid input connected." << std::endl;
@@ -384,13 +400,13 @@ namespace aufgabe4_1
             std::vector< Color > colors;
             std::vector< unsigned int > indices;
 
-            // Vertices
+            // Copy mesh vertices to float buffers (graphics API expects float).
             const auto& pts = grid->points();
             debugLog() << "Input Grid points: " << pts.size() << std::endl;
             vertices.reserve( pts.size() );
             for( size_t i = 0; i < pts.size(); ++i ) vertices.push_back( toPointF( pts[i] ) );
 
-            // Normals
+            // Normals: use the ones from the generator (for correct lighting) or fallback to a default.
             auto normalFunc = options.get< Function< Vector3 > >( "Normals" );
             if( normalFunc )
             {
@@ -408,7 +424,7 @@ namespace aufgabe4_1
                 // Note: Better fallback would be computing mesh normals, but we expect analytic ones here.
             }
 
-            // Colors
+            // Per-vertex color from the generator (or grey if not connected).
             auto colorFunc = options.get< Function< Color > >( "Color" );
             if( colorFunc )
             {
@@ -423,7 +439,7 @@ namespace aufgabe4_1
                 colors.resize( pts.size(), Color(0.8, 0.8, 0.8, 1.0) );
             }
 
-            // Indices
+            // Triangle list: each cell is three vertex indices.
             const auto& cells = grid->cells();
             indices.reserve( cells.size() * 3 );
             for( size_t i = 0; i < cells.size(); ++i )
@@ -439,7 +455,7 @@ namespace aufgabe4_1
 
             if( vertices.empty() ) { clearGraphics( "Glyphs" ); return; }
 
-            // Compute Bounding Box of Vertices
+            // Log bounding box for debugging.
             PointF<3> minVert = vertices[0];
             PointF<3> maxVert = vertices[0];
             for( const auto& v : vertices ) {
@@ -450,7 +466,7 @@ namespace aufgabe4_1
             }
             debugLog() << "Vertex Bounds: Min=[" << minVert << "], Max=[" << maxVert << "]" << std::endl;
 
-            // Render
+            // Load Phong shader and build one drawable (positions, normals, colors, indices).
             auto const& system = graphics::GraphicsSystem::instance();
             std::string resourcePath = PluginRegistrationService::getInstance().getResourcePath( "utils/Graphics" );
             if( !resourcePath.empty() && resourcePath.back() != '/' ) resourcePath += "/";
@@ -471,7 +487,8 @@ namespace aufgabe4_1
 
             auto bs = graphics::computeBoundingSphere( vertices );
             debugLog() << "Computed Bounding Sphere: Center=[" << bs.center() << "], Radius=" << bs.radius() << std::endl;
-            
+
+            // Single drawable: all glyphs in one triangle mesh, sent to the 3D view.
             auto drawable = system.makePrimitive(
                 graphics::PrimitiveConfig{ graphics::RenderPrimitives::TRIANGLES }
                     .vertexBuffer( "position", system.makeBuffer( vertices ) )

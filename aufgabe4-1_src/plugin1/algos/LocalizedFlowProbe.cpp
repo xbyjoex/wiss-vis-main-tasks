@@ -25,6 +25,7 @@ namespace aufgabe4_1
         constexpr double kMinDirectionNorm = 1e-9;
         constexpr double kDefaultStepSize = 1e-4;
 
+        // Evaluate velocity at one point; returns zero if point is outside the field.
         Vector3 evaluateField( FieldEvaluator< 3, Vector3 >& evaluator, const Point3& position, double time )
         {
             evaluator.reset( position, time );
@@ -32,7 +33,7 @@ namespace aufgabe4_1
             return evaluator.value();
         }
 
-        // Compute Gradient Tensor (Jacobian)
+        // Jacobian J: how velocity changes in x, y, z. Built from central differences (sample ±h along each axis).
         Tensor< double, 3, 3 > computeGradient( FieldEvaluator< 3, Vector3 >& evaluator, const Point3& p, double time, double h )
         {
             // Central differences
@@ -54,17 +55,19 @@ namespace aufgabe4_1
                                            dv_dx[2], dv_dy[2], dv_dz[2] } );
         }
 
+        // Divergence = sum of diagonal of J. Positive = flow spreads out, negative = converges.
         double computeDivergence( const Tensor< double, 3, 3 >& J )
         {
             return J(0,0) + J(1,1) + J(2,2);
         }
 
+        // Rotation (curl): from the off-diagonal entries of J. Measures local spin of the flow.
         Vector3 computeRotation( const Tensor< double, 3, 3 >& J )
         {
             return Vector3( J(2,1) - J(1,2), J(0,2) - J(2,0), J(1,0) - J(0,1) );
         }
 
-        // Curvature vector c = a_perp/|u| for osculating circle (de Leeuw & van Wijk)
+        // Curvature: take the part of acceleration perpendicular to velocity, divide by speed. Gives how much the streamline bends (used for the arc).
         Vector3 computeCurvature( const Vector3& u, const Vector3& a )
         {
             double uu = u * u;
@@ -127,19 +130,22 @@ namespace aufgabe4_1
         {
             debugLog() << "Starting LocalizedFlowProbe Calculation..." << std::endl;
             
+            // We need a vector field as input (e.g. from a file loader).
             auto field = options.get< Field< 3, Vector3 > >( "Vector Field" );
             auto function = options.get< Function< Vector3 > >( "Vector Field" );
-            if( !field || !function ) { 
+            if( !field || !function ) {
                 debugLog() << "Error: Input Vector Field is missing." << std::endl;
                 clearResults(); return; 
             }
 
+            // The field must be defined on a 3D grid so we know where we can sample.
             auto grid = std::dynamic_pointer_cast< const Grid< 3 > >( function->domain() );
             if( !grid ) {
                 debugLog() << "Error: Field is not defined on a grid." << std::endl;
                  throw std::logic_error( "Field not on a grid." );
             }
 
+            // Evaluator lets us ask "what is the velocity at this point?"
             auto evaluator = field->makeEvaluator();
             if( !evaluator ) { clearResults(); return; }
 
@@ -147,7 +153,7 @@ namespace aufgabe4_1
             double stepSize = options.get< double >( "Step Size" );
             int sampleCount = std::max( 1, options.get< int >( "Sample Count" ) );
 
-            // Bounding Box
+            // Find the box that contains all grid points (min and max x, y, z).
             const auto& gridPoints = grid->points();
             if( gridPoints.size() == 0 ) { clearResults(); return; }
             Point3 gridMin = gridPoints[0], gridMax = gridPoints[0];
@@ -159,6 +165,7 @@ namespace aufgabe4_1
             
             debugLog() << "Grid Bounds: Min=" << gridMin << ", Max=" << gridMax << std::endl;
 
+            // Distance between probe positions. If a dimension has zero size we don't sample along it.
             Vector3 gridSize = gridMax - gridMin;
             double maxDim = std::max( { gridSize[0], gridSize[1], gridSize[2] } );
             double spacing = maxDim / static_cast< double >( sampleCount + 1 );
@@ -175,6 +182,7 @@ namespace aufgabe4_1
             std::vector< double > divergence;
             std::vector< Vector3 > curvature;
 
+            // Sample grid; at each point get v, J, a, div, curvature (skip zero velocity).
             Algorithm::Progress progress( *this, "Sampling Field", (countX+1)*(countY+1)*(countZ+1) );
             size_t pIdx = 0;
 
@@ -185,18 +193,17 @@ namespace aufgabe4_1
                         progress = ++pIdx;
                         if( abortFlag ) return;
 
+                        // Position of this probe in 3D.
                         Point3 p( gridMin[0] + i*spacing, gridMin[1] + j*spacing, gridMin[2] + k*spacing );
-                        
+
                         evaluator->reset( p, time );
                         if( !*evaluator ) continue;
 
                         Vector3 v = evaluator->value();
                         if( norm( v ) < kMinDirectionNorm ) continue;
 
-                        // Compute Gradient Tensor J
+                        // Gradient J and acceleration a = J*v (how velocity changes along the flow).
                         auto J = computeGradient( *evaluator, p, time, stepSize );
-                        
-                        // Compute Acceleration a = (v . grad) v = J * v
                         Vector3 a = J * v; 
 
                         points.push_back( p );
@@ -206,14 +213,16 @@ namespace aufgabe4_1
                         divergence.push_back( computeDivergence( J ) );
                         curvature.push_back( computeCurvature( v, a ) );
                     }
-            
+
             debugLog() << "Generated " << points.size() << " valid probes." << std::endl;
 
-            if( points.empty() ) { 
+            // If no valid probes (e.g. field is zero everywhere), stop.
+            if( points.empty() ) {
                 debugLog() << "Warning: No probes generated (field might be zero)." << std::endl;
                 clearResults(); return; 
             }
 
+            // Pack everything into a point set and attached functions so the renderer can use them.
             auto pointSet = DomainFactory::makePointSet< 3 >( std::move( points ) );
             setResult( "Probe Points", pointSet );
             setResult( "Velocity", fantom::addData( pointSet, PointSet< 3 >::Points, velocity ) );
@@ -271,6 +280,7 @@ namespace aufgabe4_1
 
         void execute( const Algorithm::Options& options, const volatile bool& abortFlag ) override
         {
+            // Read the data produced by the Localized Flow Probe algorithm (points + velocity, etc.).
             auto pointSet = options.get< PointSet< 3 > >( "Probe Points" );
             auto velFunc = options.get< Function< Vector3 > >( "Velocity" );
             auto accFunc = options.get< Function< Vector3 > >( "Acceleration" );
@@ -279,6 +289,7 @@ namespace aufgabe4_1
             auto curvFunc = options.get< Function< Vector3 > >( "Curvature" );
             if( !pointSet || !velFunc ) { clearGraphics( "Flow Probes" ); return; }
 
+            // User options: overall size, shaft length, ring size, line thickness, and which parts to show.
             double scale = options.get< double >( "Glyph Scale" );
             double tubeLength = std::max( 0.05, std::min( 1.0, options.get< double >( "Tube Length" ) ) );
             double ringRelSize = options.get< double >( "Ring Size" );
@@ -290,6 +301,7 @@ namespace aufgabe4_1
             const auto& points = pointSet->points();
             size_t numPoints = points.size();
 
+            // We need the maximum velocity to scale shaft length (faster flow = longer shaft).
             double maxVel = 0.0;
             for( size_t i = 0; i < numPoints && i < velFunc->values().size(); ++i )
             {
@@ -298,12 +310,14 @@ namespace aufgabe4_1
             }
             if( maxVel < 1e-9 ) maxVel = 1.0;
 
+            // Number of segments for arc, tube cross-section, lens: more = smoother but heavier.
             constexpr double kappaEps = 1e-6;
             const int arcSegs = 16;
             const int tubeCirc = 10;
             const int paraboloidRings = 6;
             const int paraboloidSegs = 12;
 
+            // We fill these with vertices and indices; lines for arc/head/ring, triangles for tube/membrane/lens.
             std::vector< PointF< 3 > > lineVerts;
             std::vector< Color > lineColors;
             std::vector< unsigned int > lineIndices;
@@ -321,6 +335,7 @@ namespace aufgabe4_1
                 double vLen = norm( v );
                 if( vLen < kMinDirectionNorm ) continue;
 
+                // Shaft length in "time" units: scaled by speed so faster flow gets a longer arrow.
                 double dt = scale * tubeLength * ( vLen / maxVel );
                 Vector3 a( 0, 0, 0 );
                 if( accFunc && i < accFunc->values().size() ) a = accFunc->values()[i];
@@ -330,14 +345,17 @@ namespace aufgabe4_1
                 if( divFunc && i < divFunc->values().size() ) div = divFunc->values()[i];
                 Vector3 c = ( curvFunc && i < curvFunc->values().size() ) ? curvFunc->values()[i] : computeCurvature( v, a );
 
+                // Color: by divergence (red = spreading, blue = converging) or one color per probe.
                 double divSat = std::tanh( div * 5.0 );
                 Color divColor = ( divSat > 0 ) ? Color( 1.0f, 1.0f - (float)divSat, 1.0f - (float)divSat )
                                                 : Color( 1.0f + (float)divSat, 1.0f + (float)divSat, 1.0f );
                 Color lineColor = colorByProbeId ? probeColor( i ) : divColor;
                 Color baseColor = colorByProbeId ? lineColor : divColor;
+                // Curl along flow direction: drives the torsion stripe pattern on the tube.
                 Vector3 curlVec = computeRotation( J );
                 double torsionProxy = ( vLen > 1e-12 ) ? ( curlVec * v ) / vLen : 0.0;
 
+                // Shaft = arc of osculating circle (radius 1/kappa, length L); fallback to straight segment.
                 Vector3 T = normalized( v );
                 double kappa = norm( c );
                 double L = vLen * dt;
@@ -359,11 +377,13 @@ namespace aufgabe4_1
                         arcPoints.push_back( center + R * ( -std::cos( theta ) * N + std::sin( theta ) * T ) );
                     }
                 }
+                // Where the arrow ends and which way it points (for head and membrane).
                 Point3 tipPos = arcPoints.back();
                 Vector3 tipDir = ( arcPoints.size() >= 2 )
                     ? normalized( arcPoints.back() - arcPoints[ arcPoints.size() - 2 ] ) : T;
                 double drawLen = L;
 
+                // Draw the arc (shaft) and the arrow head as line segments (each segment = two vertices).
                 for( size_t s = 0; s + 1 < arcPoints.size(); ++s )
                 {
                     size_t idx = lineVerts.size();
@@ -375,6 +395,7 @@ namespace aufgabe4_1
                     lineIndices.push_back( (unsigned int)idx + 1 );
                 }
 
+                // Arrow head: small cone from tip backward. We need two perpendicular directions in the plane of the cone base.
                 double headSize = std::max( drawLen * 0.25, scale * 0.05 );
                 double headRad = headSize * 0.5;
                 Vector3 up( 0, 0, 1 );
@@ -395,6 +416,7 @@ namespace aufgabe4_1
                     lineIndices.push_back( (unsigned int)hIdx + 1 );
                 }
 
+                // Shear ring in plane perpendicular to flow; J deforms it (Frenet frame if curvature available).
                 double ringRad = scale * ringRelSize;
                 Vector3 dir = normalized( v );
                 Vector3 ringUp( 0, 0, 1 );
@@ -408,6 +430,7 @@ namespace aufgabe4_1
                     Vector3 r = pt - ringCenter;
                     return pt + J * r * ( dt * 0.5 );
                 };
+                // Draw the ring as 20 line segments; each segment connects two points on the (possibly deformed) circle.
                 int ringSegs = 20;
                 Point3 prevRingPt = ringCenter + ringRight * ringRad;
                 if( gradFunc ) prevRingPt = deform( prevRingPt );
@@ -426,11 +449,13 @@ namespace aufgabe4_1
                     prevRingPt = currPt;
                 }
 
+                // Tube along arc; stripe phase from torsion proxy (curl·u) for candy-stripe effect.
                 double tubeRad = std::max( drawLen * 0.04, scale * 0.02 );
                 size_t tubeBaseIdx = triVerts.size();
                 double arcLenSoFar = 0.0;
                 if( showTube )
                 {
+                // At each point along the arc we add a circle of vertices (tube cross-section). Tangent and two perpendiculars define the circle.
                 for( size_t s = 0; s < arcPoints.size(); ++s )
                 {
                     Vector3 tangent = ( s + 1 < arcPoints.size() )
@@ -452,6 +477,7 @@ namespace aufgabe4_1
                     }
                     if( s + 1 < arcPoints.size() ) arcLenSoFar += norm( arcPoints[s + 1] - arcPoints[s] );
                 }
+                // Connect the tube circles into quads, each quad as two triangles (indices).
                 for( size_t s = 0; s + 1 < arcPoints.size(); ++s )
                 {
                     for( int k = 0; k < tubeCirc; ++k )
@@ -467,9 +493,11 @@ namespace aufgabe4_1
                 }
                 }
 
+                // Acceleration disc at tip; bulge along flow from a·u.
                 double aAlongU = ( vLen > 1e-12 ) ? ( a * v ) / vLen : 0.0;
                 if( showMembrane )
                 {
+                // Membrane: disc at tip. Center is shifted along flow by acceleration (bulge); ring of points around it.
                 double memRad = scale * ringRelSize * 0.8;
                 int memSegs = 16;
                 size_t memBase = triVerts.size();
@@ -486,6 +514,7 @@ namespace aufgabe4_1
                     triNormals.push_back( VectorF<3>( (float)n[0], (float)n[1], (float)n[2] ) );
                     triColors.push_back( baseColor );
                 }
+                // Triangle fan: center to each consecutive pair of ring points.
                 for( int k = 0; k < memSegs; ++k )
                 {
                     triIndices.push_back( (unsigned int)memBase );
@@ -494,6 +523,7 @@ namespace aufgabe4_1
                 }
                 }
 
+                // Lens (paraboloid) at probe base: center vertex plus rings; height follows divergence (dome or bowl).
                 if( showLens )
                 {
                 double lensRad = scale * ringRelSize;
@@ -518,6 +548,7 @@ namespace aufgabe4_1
                         triColors.push_back( baseColor );
                     }
                 }
+                // Triangles from center to first ring.
                 for( int seg = 0; seg < paraboloidSegs; ++seg )
                 {
                     int seg1 = ( seg + 1 ) % paraboloidSegs;
@@ -525,6 +556,7 @@ namespace aufgabe4_1
                     triIndices.push_back( (unsigned int)( lensBase + 1 + seg ) );
                     triIndices.push_back( (unsigned int)( lensBase + 1 + seg1 ) );
                 }
+                // Triangles between consecutive rings.
                 for( int r = 0; r < paraboloidRings - 1; ++r )
                 {
                     for( int seg = 0; seg < paraboloidSegs; ++seg )
@@ -541,11 +573,13 @@ namespace aufgabe4_1
                 }
             }
 
+            // One drawable for lines (arc, head, ring), one for triangles (tube, membrane, lens); compound to single output.
             auto const& system = graphics::GraphicsSystem::instance();
             std::string resourcePath = PluginRegistrationService::getInstance().getResourcePath( "utils/Graphics" );
             if( !resourcePath.empty() && resourcePath.back() != '/' ) resourcePath += "/";
 
             std::vector< std::shared_ptr< graphics::Drawable > > drawables;
+            // Lines (arc, head, ring): load line shader, create one drawable with vertex/color/index buffers.
             if( !lineVerts.empty() )
             {
                 auto lineProg = system.makeProgramFromFiles(
@@ -562,6 +596,7 @@ namespace aufgabe4_1
                     lineProg );
                 drawables.push_back( lineDraw );
             }
+            // Triangles (tube, membrane, lens): Phong shader with normals and colors; one drawable.
             if( !triVerts.empty() )
             {
                 auto triProg = system.makeProgramFromFiles(
