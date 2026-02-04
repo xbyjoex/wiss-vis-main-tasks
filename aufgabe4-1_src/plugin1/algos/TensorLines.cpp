@@ -338,6 +338,6 @@ namespace
         }
     };
 
-    AlgorithmRegister<TensorLinesAlgorithm> dummy("Custom/TensorLines", "Berechnet Tensorlinien (major/median/minor) via Euler (feste Schrittweite).");
+    AlgorithmRegister<TensorLinesAlgorithm> dummy("Aufgabe4-1/4 Tensor Lines", "Tensor lines (major/median/minor) via Euler, fixed step size.");
 
 } // namespace

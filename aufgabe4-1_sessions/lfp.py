@@ -6,10 +6,10 @@
 ################################################################
 ###                  Reset GUI                               ###
 ################################################################
-fantom.ui.setCamera( 0, fantom.ui.Camera( fantom.math.Vector3(-0.674387, -0.806125, 0.770833), fantom.math.Vector3(-0.674387, -0.806125, -0.0719308), fantom.math.Vector3(0, 1, 0), 1, 1.0472 ) )
-fantom.ui.setCamera( 1, fantom.ui.Camera( fantom.math.Vector3(3713.54, 0, 3.02424), fantom.math.Vector3(-6.99951, 0, 3.02424), fantom.math.Vector3(0, 0, 1), 0, 1.0472 ) )
-fantom.ui.setCamera( 2, fantom.ui.Camera( fantom.math.Vector3(-6.99951, -3720.54, 3.02419), fantom.math.Vector3(-6.99951, -0.000244141, 3.02424), fantom.math.Vector3(0, -1.26881e-08, 1), 0, 1.0472 ) )
-fantom.ui.setCamera( 3, fantom.ui.Camera( fantom.math.Vector3(-6.99951, 0, 3723.57), fantom.math.Vector3(-6.99951, 0, 3.02417), fantom.math.Vector3(0, 1, 0), 0, 1.0472 ) )
+fantom.ui.setCamera( 0, fantom.ui.Camera( fantom.math.Vector3(-0.600933, -0.784496, 0.951023), fantom.math.Vector3(-0.600933, -0.784496, -1.00199), fantom.math.Vector3(0, 1, 0), 1, 1.0472 ) )
+fantom.ui.setCamera( 1, fantom.ui.Camera( fantom.math.Vector3(0.545126, -0.63502, -0.282231), fantom.math.Vector3(0, -0.63502, -0.282231), fantom.math.Vector3(0, 0, 1), 0, 1.0472 ) )
+fantom.ui.setCamera( 2, fantom.ui.Camera( fantom.math.Vector3(-0.675757, -0.353447, 0.209981), fantom.math.Vector3(-0.675757, -1.19209e-06, 0.209981), fantom.math.Vector3(0, -1.26881e-08, 1), 0, 1.0472 ) )
+fantom.ui.setCamera( 3, fantom.ui.Camera( fantom.math.Vector3(0, 0, 2), fantom.math.Vector3(0, 0, 0), fantom.math.Vector3(0, 1, 0), 0, 1.0472 ) )
 
 fantom.ui.setClippingPlane( fantom.ui.ClippingPlane( 0, fantom.math.Vector4( 1, 0, -2.23711e-17, 1 ), False ) )
 fantom.ui.setClippingPlane( fantom.ui.ClippingPlane( 1, fantom.math.Vector4( -1, 0, -2.23711e-17, 1 ), False ) )
@@ -40,27 +40,11 @@ fantom.ui.setAlgorithmPosition(Load_VTK, fantom.math.Vector2(0, 35))
 # Run the algorithm
 Load_VTK.runBlocking()
 
-Grid_ShowGrid = fantom.makeAlgorithm("Grid/Show Grid")
-Grid_ShowGrid.setName("Grid/Show Grid")
-Grid_ShowGrid.setAutoSchedule(True)
-Grid_ShowGrid.setOption("Line color", fantom.math.Color(0, 0, 1, 1))
-Grid_ShowGrid.setOption("Line width", 1)
-Grid_ShowGrid.setOption("Random jittering of color", True)
-Grid_ShowGrid.setOption("Random seed", 0)
-fantom.ui.setAlgorithmPosition(Grid_ShowGrid, fantom.math.Vector2(229.204, 56))
-Grid_ShowGrid.setVisualOutputVisible('Grid', True)
-
-# Inbound connections of this algorithm:
-Load_VTK.connect("Grid", Grid_ShowGrid, "Grid")
-
-# Run the algorithm
-Grid_ShowGrid.runBlocking()
-
 Aufgabe41_1LocalizedFlowProbe = fantom.makeAlgorithm("Aufgabe4-1/1 Localized Flow Probe")
 Aufgabe41_1LocalizedFlowProbe.setName("Aufgabe4-1/1 Localized Flow Probe")
 Aufgabe41_1LocalizedFlowProbe.setAutoSchedule(True)
 Aufgabe41_1LocalizedFlowProbe.setOption("Step Size", 0.0001)
-Aufgabe41_1LocalizedFlowProbe.setOption("Sample Count", 5)
+Aufgabe41_1LocalizedFlowProbe.setOption("Sample Count", 3)
 Aufgabe41_1LocalizedFlowProbe.setOption("Time", 0)
 fantom.ui.setAlgorithmPosition(Aufgabe41_1LocalizedFlowProbe, fantom.math.Vector2(0, 142))
 
@@ -73,11 +57,15 @@ Aufgabe41_1LocalizedFlowProbe.runBlocking()
 Aufgabe41_1FlowProbeRendering = fantom.makeAlgorithm("Aufgabe4-1/1 Flow Probe Rendering")
 Aufgabe41_1FlowProbeRendering.setName("Aufgabe4-1/1 Flow Probe Rendering")
 Aufgabe41_1FlowProbeRendering.setAutoSchedule(True)
-Aufgabe41_1FlowProbeRendering.setOption("Glyph Scale", 0.1)
+Aufgabe41_1FlowProbeRendering.setOption("Glyph Scale", 0.5)
 Aufgabe41_1FlowProbeRendering.setOption("Tube Length", 0.2)
-Aufgabe41_1FlowProbeRendering.setOption("Ring Size", 0.2)
-Aufgabe41_1FlowProbeRendering.setOption("Line Width", 1)
-fantom.ui.setAlgorithmPosition(Aufgabe41_1FlowProbeRendering, fantom.math.Vector2(0, 312))
+Aufgabe41_1FlowProbeRendering.setOption("Ring Size", 0.1)
+Aufgabe41_1FlowProbeRendering.setOption("Line Width", 2)
+Aufgabe41_1FlowProbeRendering.setOption("Show Tube", True)
+Aufgabe41_1FlowProbeRendering.setOption("Show Membrane", True)
+Aufgabe41_1FlowProbeRendering.setOption("Show Lens", True)
+Aufgabe41_1FlowProbeRendering.setOption("Color by Probe ID", False)
+fantom.ui.setAlgorithmPosition(Aufgabe41_1FlowProbeRendering, fantom.math.Vector2(0, 333))
 Aufgabe41_1FlowProbeRendering.setVisualOutputVisible('Flow Probes', True)
 
 # Inbound connections of this algorithm:
@@ -85,6 +73,7 @@ Aufgabe41_1LocalizedFlowProbe.connect("Velocity", Aufgabe41_1FlowProbeRendering,
 Aufgabe41_1LocalizedFlowProbe.connect("Probe Points", Aufgabe41_1FlowProbeRendering, "Probe Points")
 Aufgabe41_1LocalizedFlowProbe.connect("Divergence", Aufgabe41_1FlowProbeRendering, "Divergence")
 Aufgabe41_1LocalizedFlowProbe.connect("Acceleration", Aufgabe41_1FlowProbeRendering, "Acceleration")
+Aufgabe41_1LocalizedFlowProbe.connect("Curvature", Aufgabe41_1FlowProbeRendering, "Curvature")
 Aufgabe41_1LocalizedFlowProbe.connect("Gradient", Aufgabe41_1FlowProbeRendering, "Gradient")
 
 # Run the algorithm

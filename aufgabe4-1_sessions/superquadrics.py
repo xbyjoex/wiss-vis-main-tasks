@@ -6,10 +6,10 @@
 ################################################################
 ###                  Reset GUI                               ###
 ################################################################
-fantom.ui.setCamera( 0, fantom.ui.Camera( fantom.math.Vector3(81.409, 99.5, 323.452), fantom.math.Vector3(81.409, 99.5, 81.4091), fantom.math.Vector3(-6.26179e-10, 1, 0), 1, 1.0472 ) )
-fantom.ui.setCamera( 1, fantom.ui.Camera( fantom.math.Vector3(193.824, 12.2647, 0), fantom.math.Vector3(40.0611, 12.2647, 0), fantom.math.Vector3(0, 0, 1), 1, 1.0472 ) )
-fantom.ui.setCamera( 2, fantom.ui.Camera( fantom.math.Vector3(40.0611, -141.499, -1.95096e-06), fantom.math.Vector3(40.0611, 12.2646, -2.27374e-13), fantom.math.Vector3(0, -1.26881e-08, 1), 0, 1.0472 ) )
-fantom.ui.setCamera( 3, fantom.ui.Camera( fantom.math.Vector3(76.3268, 103.789, 409.282), fantom.math.Vector3(76.3268, 103.789, 77.2579), fantom.math.Vector3(0, 1, 0), 0, 1.0472 ) )
+fantom.ui.setCamera( 0, fantom.ui.Camera( fantom.math.Vector3(79.0709, 93.655, 242.767), fantom.math.Vector3(79.0709, 93.655, 81.7562), fantom.math.Vector3(0, 1, 0), 1, 1.0472 ) )
+fantom.ui.setCamera( 1, fantom.ui.Camera( fantom.math.Vector3(345.662, 99.1793, 81.7562), fantom.math.Vector3(81.0161, 99.1793, 81.7562), fantom.math.Vector3(0, 0, 1), 0, 1.0472 ) )
+fantom.ui.setCamera( 2, fantom.ui.Camera( fantom.math.Vector3(81.0161, -165.466, 81.7562), fantom.math.Vector3(81.0161, 99.1793, 81.7562), fantom.math.Vector3(0, -1.26881e-08, 1), 0, 1.0472 ) )
+fantom.ui.setCamera( 3, fantom.ui.Camera( fantom.math.Vector3(81.0161, 99.1793, 346.402), fantom.math.Vector3(81.0161, 99.1793, 81.7562), fantom.math.Vector3(0, 1, 0), 0, 1.0472 ) )
 
 fantom.ui.setClippingPlane( fantom.ui.ClippingPlane( 0, fantom.math.Vector4( 1, 0, -2.23711e-17, 1 ), False ) )
 fantom.ui.setClippingPlane( fantom.ui.ClippingPlane( 1, fantom.math.Vector4( -1, 0, -2.23711e-17, 1 ), False ) )
@@ -20,7 +20,7 @@ fantom.ui.setClippingPlane( fantom.ui.ClippingPlane( 5, fantom.math.Vector4( -0,
 
 fantom.ui.setBackgroundColor( fantom.math.Color(1, 1, 1, 1) )
 
-fantom.ui.setRotationCenter( fantom.ui.RotationCenter( fantom.math.Vector3(0, 0.762102, 0.69282), True, True, True ) )
+fantom.ui.setRotationCenter( fantom.ui.RotationCenter( fantom.math.Vector3(0, 0, 0), True, True, True ) )
 
 
 ################################################################
@@ -31,7 +31,7 @@ Load_VTK.setName("Load/VTK")
 Load_VTK.setAutoSchedule(True)
 Load_VTK.setOption("Input File", "/Users/jonaspaul/Documents/Uni/Dev/WissenschaftlicheVisualisierung/Wissenschaftliche Visualisierung Hauptaufgaben/TestDataHauptaufgaben/BrainTensors.vtk")
 Load_VTK.setOption("Big Endian", True)
-Load_VTK.setOption("Dimension", "3D")
+Load_VTK.setOption("Dimension", "2D if third component is zero")
 Load_VTK.setOption("Time List", "")
 fantom.ui.setAlgorithmPosition(Load_VTK, fantom.math.Vector2(0, 35))
 
@@ -43,14 +43,16 @@ Load_VTK.runBlocking()
 Aufgabe41_2SuperquadricGeneration = fantom.makeAlgorithm("Aufgabe4-1/2 Superquadric Generation")
 Aufgabe41_2SuperquadricGeneration.setName("Aufgabe4-1/2 Superquadric Generation")
 Aufgabe41_2SuperquadricGeneration.setAutoSchedule(True)
-Aufgabe41_2SuperquadricGeneration.setOption("Glyph Scale", 18000)
-Aufgabe41_2SuperquadricGeneration.setOption("Sharpness Parameter γ", 0.5)
+Aufgabe41_2SuperquadricGeneration.setOption("Glyph Scale", 25000)
+Aufgabe41_2SuperquadricGeneration.setOption("Sharpness Parameter γ", 2.5)
 Aufgabe41_2SuperquadricGeneration.setOption("Use Kindlmann Shape", True)
-Aufgabe41_2SuperquadricGeneration.setOption("Resolution Theta", 50)
-Aufgabe41_2SuperquadricGeneration.setOption("Resolution Phi", 50)
-Aufgabe41_2SuperquadricGeneration.setOption("Sample Count", 10)
+Aufgabe41_2SuperquadricGeneration.setOption("Resolution Theta", 20)
+Aufgabe41_2SuperquadricGeneration.setOption("Resolution Phi", 20)
+Aufgabe41_2SuperquadricGeneration.setOption("Sample Count", 20)
 Aufgabe41_2SuperquadricGeneration.setOption("Time", 0)
-fantom.ui.setAlgorithmPosition(Aufgabe41_2SuperquadricGeneration, fantom.math.Vector2(0, 143))
+Aufgabe41_2SuperquadricGeneration.setOption("Normalize to cell", True)
+Aufgabe41_2SuperquadricGeneration.setOption("Cell fill", 1)
+fantom.ui.setAlgorithmPosition(Aufgabe41_2SuperquadricGeneration, fantom.math.Vector2(0, 142))
 
 # Inbound connections of this algorithm:
 Load_VTK.connect("Fields", Aufgabe41_2SuperquadricGeneration, "Tensor Field")

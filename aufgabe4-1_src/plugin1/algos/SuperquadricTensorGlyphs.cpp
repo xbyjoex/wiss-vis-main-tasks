@@ -104,6 +104,8 @@ namespace aufgabe4_1
                 add< int >( "Resolution Phi", "Phi resolution", 20 );
                 add< int >( "Sample Count", "Grid sampling resolution", 10 );
                 add< double >( "Time", "Evaluation time", 0.0 );
+                add< bool >( "Normalize to cell", "Scale each glyph to fit cell (no overlap)", false );
+                add< double >( "Cell fill", "Fraction of cell size when normalized (0.5–1.0)", 0.8 );
             }
         };
 
@@ -145,6 +147,8 @@ namespace aufgabe4_1
             int resTheta = std::max( 4, options.get< int >( "Resolution Theta" ) );
             int resPhi = std::max( 4, options.get< int >( "Resolution Phi" ) );
             int sampleCount = std::max( 1, options.get< int >( "Sample Count" ) );
+            bool normalizeToCell = options.get< bool >( "Normalize to cell" );
+            double cellFill = std::max( 0.01, std::min( 1.0, options.get< double >( "Cell fill" ) ) );
 
             debugLog() << "Parameters:" << std::endl;
             debugLog() << "  Time: " << time << std::endl;
@@ -154,6 +158,8 @@ namespace aufgabe4_1
             debugLog() << "  Res Theta: " << resTheta << std::endl;
             debugLog() << "  Res Phi: " << resPhi << std::endl;
             debugLog() << "  Sample Count: " << sampleCount << std::endl;
+            debugLog() << "  Normalize to cell: " << ( normalizeToCell ? "Yes" : "No" ) << std::endl;
+            if( normalizeToCell ) debugLog() << "  Cell fill: " << cellFill << std::endl;
 
             // Bounding Box & Sampling
             const auto& gridPoints = grid->points();
@@ -246,6 +252,13 @@ namespace aufgabe4_1
                 FormParameters fp = computeFormParameters( m.c_l, m.c_p, m.c_s, gamma, useKindlmann );
                 Color glyphColor( std::abs( v1[0] ), std::abs( v1[1] ), std::abs( v1[2] ), 1.0f );
 
+                double scaleFactor = 1.0;
+                if( normalizeToCell && l1 >= kMinEigenvalue && spacing > 1e-12 )
+                {
+                    double targetRadius = 0.5 * spacing * cellFill;
+                    scaleFactor = targetRadius / ( glyphScale * l1 );
+                }
+
                 size_t baseIndex = vertices.size();
 
                 for( int i = 0; i <= resTheta; ++i )
@@ -271,7 +284,7 @@ namespace aufgabe4_1
                         Vector3 rotPos = scaledPos[0] * v2 + scaledPos[1] * v3 + scaledPos[2] * v1;
                         Vector3 rotNorm = scaledNorm[0] * v2 + scaledNorm[1] * v3 + scaledNorm[2] * v1;
 
-                        vertices.push_back( p + glyphScale * rotPos );
+                        vertices.push_back( p + scaleFactor * glyphScale * rotPos );
                         normals.push_back( normalized( rotNorm ) );
                         colors.push_back( glyphColor );
                     }

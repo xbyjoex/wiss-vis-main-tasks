@@ -53,30 +53,20 @@ Durch diese Trennung können Sie auch debuggen: Verbinden Sie z.B. Algo 1 ("Glyp
 Auch hier wurde die Berechnung von der Visualisierung getrennt, um maximale Flexibilität zu bieten.
 
 ### 3.1 Berechnung: Localized Flow Probe (DataAlgorithm)
-Berechnet physikalische Eigenschaften (Divergenz, Rotation, Krümmung) an Sampling-Punkten.
+Berechnet Geschwindigkeit, Jacobi-Matrix, Beschleunigung, Divergenz und Krümmungsvektor (de Leeuw & van Wijk).
 
 - **Name:** `Aufgabe4-1/1 Localized Flow Probe`
-- **Inputs:**
-  - Vector Field
-  - Step Size, Sample Count, Time
+- **Inputs:** Vector Field, Step Size, Sample Count, Time
 - **Outputs:**
   - `Probe Points` (PointSet)
   - `Velocity` (Function<Vector3>)
-  - `Rotation` (Function<Vector3>)
+  - `Acceleration` (Function<Vector3>)
+  - `Gradient` (Function<Tensor<double,3,3>>)
   - `Divergence` (Function<double>)
-  - `Curvature` (Function<double>)
+  - `Curvature` (Function<Vector3>) – Krümmungsvektor für Schmiegkreis/Frenet
 
 ### 3.2 Visualisierung: Flow Probe Rendering (VisAlgorithm)
-Rendert Vektoren als 3D-Pfeile mit konfigurierbarer Farbe und Größe.
+Rendert die Paper-Primitiven: Schaft als Bogen des Schmiegkreises, Tube mit Torsion-Streifen, Beschleunigungs-Membran, Divergenz-Paraboloid (Linse), Shear-Ring, Pfeilspitze. Ein Grafik-Output „Flow Probes“ (Compound aus Linien und Dreiecken).
 
-- **Name:** `Aufgabe4-1/1 Flow Probe Rendering`
-- **Inputs:**
-  - `Probe Points`: Verbinden mit "Probe Points" aus Algo 1.
-  - `Vector Field`: Verbinden mit "Velocity" oder "Rotation".
-  - `Scalar Field` (Optional): Verbinden mit "Divergence" oder "Curvature" zur Einfärbung.
-- **Parameter:**
-  - `Glyph Scale`: Skalierung der Pfeile.
-  - `Arrow Head Size`: Relative Größe der Pfeilspitze.
-  - `Normalize Vectors`: Wenn an, haben alle Pfeile gleiche Länge (nur Richtung).
-  - `Scalar Max`: Wert für maximale Farbsättigung (wichtig für Scalar Coloring!).
-  - `Default Color`: Farbe, falls kein Skalarfeld verbunden ist.
+- **Inputs:** Probe Points, Velocity (Pflicht); optional Acceleration, Gradient, Divergence, Curvature
+- **Parameter:** Glyph Scale, Tube Length, Ring Size, Line Width
