@@ -1,5 +1,4 @@
-// JP, 01/2025 - Aufgabe 4.1: Localized Flow Probe
-// Enhanced Visualization: Curved Tube + Ring Probe (de Leeuw & van Wijk style)
+// Localized flow probe (de Leeuw & van Wijk 1993). DataAlgorithm + VisAlgorithm.
 
 #include <algorithm>
 #include <cmath>
@@ -36,8 +35,6 @@ namespace aufgabe4_1
         // Compute Gradient Tensor (Jacobian)
         Tensor< double, 3, 3 > computeGradient( FieldEvaluator< 3, Vector3 >& evaluator, const Point3& p, double time, double h )
         {
-            Vector3 v = evaluateField( evaluator, p, time );
-            
             // Central differences
             Vector3 v_xp = evaluateField( evaluator, p + Vector3( h, 0.0, 0.0 ), time );
             Vector3 v_xm = evaluateField( evaluator, p - Vector3( h, 0.0, 0.0 ), time );
@@ -67,13 +64,36 @@ namespace aufgabe4_1
             return Vector3( J(2,1) - J(1,2), J(0,2) - J(2,0), J(1,0) - J(0,1) );
         }
 
+        // Curvature vector c = a_perp/|u| for osculating circle (de Leeuw & van Wijk)
+        Vector3 computeCurvature( const Vector3& u, const Vector3& a )
+        {
+            double uu = u * u;
+            if( uu < kMinDirectionNorm * kMinDirectionNorm ) return Vector3( 0, 0, 0 );
+            Vector3 aPerp = a - u * ( ( u * a ) / uu );
+            return aPerp / std::sqrt( uu );
+        }
+
         PointF<3> toPointF( const Point3& p ) { return PointF<3>( (float)p[0], (float)p[1], (float)p[2] ); }
+
+        // Distinct color per probe index (golden-ratio hue) so each probe is visually grouped
+        Color probeColor( size_t index )
+        {
+            float h = std::fmod( index * 0.618033988749895f, 1.0f );
+            float s = 0.88f, v = 1.0f;
+            float c = v * s;
+            float x = c * ( 1.0f - std::abs( std::fmod( h * 6.0f, 2.0f ) - 1.0f ) );
+            float m = v - c;
+            float r, g, b;
+            if( h < 1.0f / 6.0f )      { r = c; g = x; b = 0.0f; }
+            else if( h < 2.0f / 6.0f ) { r = x; g = c; b = 0.0f; }
+            else if( h < 3.0f / 6.0f ) { r = 0.0f; g = c; b = x; }
+            else if( h < 4.0f / 6.0f ) { r = 0.0f; g = x; b = c; }
+            else if( h < 5.0f / 6.0f ) { r = x; g = 0.0f; b = c; }
+            else                       { r = c; g = 0.0f; b = x; }
+            return Color( r + m, g + m, b + m, 1.0f );
+        }
     }
 
-    // ==========================================================================================
-    // ALGORITHM 1: Calculation (DataAlgorithm)
-    // Computes full Flow Probe Data (Velocity, Acceleration, Gradient/Jacobian)
-    // ==========================================================================================
     class LocalizedFlowProbe : public DataAlgorithm
     {
     public:
@@ -83,7 +103,7 @@ namespace aufgabe4_1
             {
                 add< Field< 3, Vector3 > >( "Vector Field", "Input flow field", Options::REQUIRED );
                 add< double >( "Step Size", "Finite difference step", kDefaultStepSize );
-                add< int >( "Sample Count", "Grid sampling resolution", 10 ); // Low default for discrete probes
+                add< int >( "Sample Count", "Probes per axis (2–3 = clear arrows; 5+ = dense)", 3 );
                 add< double >( "Time", "Evaluation time", 0.0 );
             }
         };
@@ -94,9 +114,10 @@ namespace aufgabe4_1
             {
                 add< const PointSet< 3 > >( "Probe Points" );
                 add< const Function< Vector3 > >( "Velocity" );
-                add< const Function< Vector3 > >( "Acceleration" ); // For curvature
-                add< const Function< Tensor< double, 3, 3 > > >( "Gradient" ); // Full Jacobian
-                add< const Function< double > >( "Divergence" ); // Convenience
+                add< const Function< Vector3 > >( "Acceleration" );
+                add< const Function< Tensor< double, 3, 3 > > >( "Gradient" );
+                add< const Function< double > >( "Divergence" );
+                add< const Function< Vector3 > >( "Curvature" );
             }
         };
 
@@ -152,6 +173,7 @@ namespace aufgabe4_1
             std::vector< Vector3 > acceleration;
             std::vector< Tensor< double, 3, 3 > > gradient;
             std::vector< double > divergence;
+            std::vector< Vector3 > curvature;
 
             Algorithm::Progress progress( *this, "Sampling Field", (countX+1)*(countY+1)*(countZ+1) );
             size_t pIdx = 0;
@@ -182,6 +204,7 @@ namespace aufgabe4_1
                         acceleration.push_back( a );
                         gradient.push_back( J );
                         divergence.push_back( computeDivergence( J ) );
+                        curvature.push_back( computeCurvature( v, a ) );
                     }
             
             debugLog() << "Generated " << points.size() << " valid probes." << std::endl;
@@ -197,7 +220,8 @@ namespace aufgabe4_1
             setResult( "Acceleration", fantom::addData( pointSet, PointSet< 3 >::Points, acceleration ) );
             setResult( "Gradient", fantom::addData( pointSet, PointSet< 3 >::Points, gradient ) );
             setResult( "Divergence", fantom::addData( pointSet, PointSet< 3 >::Points, divergence ) );
-            
+            setResult( "Curvature", fantom::addData( pointSet, PointSet< 3 >::Points, curvature ) );
+
             debugLog() << "Finished LocalizedFlowProbe Calculation." << std::endl;
         }
     };
@@ -221,13 +245,17 @@ namespace aufgabe4_1
                 add< PointSet< 3 > >( "Probe Points", "Sample points", Options::REQUIRED );
                 add< Function< Vector3 > >( "Velocity", "Velocity Field", Options::REQUIRED );
                 add< Function< Vector3 > >( "Acceleration", "Acceleration Field (for Curvature)" );
-                add< Function< Tensor< double, 3, 3 > > >( "Gradient", "Gradient Field (for Shear/Ring)" );
-                add< Function< double > >( "Divergence", "Divergence Field (for Color)" );
-                
-                add< double >( "Glyph Scale", "Overall Size", 1.0 );
-                add< double >( "Tube Length", "Relative length of each probe (0.1–1). Shorter = less clutter.", 0.25 );
-                add< double >( "Ring Size", "Relative Ring Radius", 0.3 );
-                add< double >( "Line Width", "Line thickness in pixels", 2.0 );
+                add< Function< Tensor< double, 3, 3 > > >( "Gradient", "Gradient Field (Shear/Torsion)" );
+                add< Function< double > >( "Divergence", "Divergence (lens/color)" );
+                add< Function< Vector3 > >( "Curvature", "Curvature vector (optional; else from Velocity+Acceleration)" );
+                add< double >( "Glyph Scale", "Overall size (smaller = less overlap)", 0.5 );
+                add< double >( "Tube Length", "Shaft length factor (0.1–0.5)", 0.2 );
+                add< double >( "Ring Size", "Ring/lens radius factor", 0.2 );
+                add< double >( "Line Width", "Line width in pixels (thicker = easier to see which belongs to which)", 3.0 );
+                add< bool >( "Show Tube", "Tube with torsion stripes", true );
+                add< bool >( "Show Membrane", "Acceleration disc at tip", true );
+                add< bool >( "Show Lens", "Divergence paraboloid at base", true );
+                add< bool >( "Color by Probe ID", "One color per probe (arc/ring/head grouped); off = by divergence", true );
             }
         };
 
@@ -243,199 +271,314 @@ namespace aufgabe4_1
 
         void execute( const Algorithm::Options& options, const volatile bool& abortFlag ) override
         {
-            debugLog() << "Starting FlowProbeRenderer..." << std::endl;
             auto pointSet = options.get< PointSet< 3 > >( "Probe Points" );
             auto velFunc = options.get< Function< Vector3 > >( "Velocity" );
-            auto accFunc = options.get< Function< Vector3 > >( "Acceleration" ); 
+            auto accFunc = options.get< Function< Vector3 > >( "Acceleration" );
             auto gradFunc = options.get< Function< Tensor< double, 3, 3 > > >( "Gradient" );
-            auto divFunc = options.get< Function< double > >( "Divergence" ); 
-            
-            if( !pointSet || !velFunc ) { 
-                debugLog() << "Error: Probe Points or Velocity Field missing." << std::endl;
-                clearGraphics( "Flow Probes" ); return; 
-            }
-            
-            debugLog() << "Input: " << pointSet->points().size() << " probe points." << std::endl;
-            if( gradFunc ) debugLog() << "Gradient Field provided (Shear enabled)." << std::endl;
+            auto divFunc = options.get< Function< double > >( "Divergence" );
+            auto curvFunc = options.get< Function< Vector3 > >( "Curvature" );
+            if( !pointSet || !velFunc ) { clearGraphics( "Flow Probes" ); return; }
 
             double scale = options.get< double >( "Glyph Scale" );
             double tubeLength = std::max( 0.05, std::min( 1.0, options.get< double >( "Tube Length" ) ) );
             double ringRelSize = options.get< double >( "Ring Size" );
             double lineWidthOpt = std::max( 0.5, options.get< double >( "Line Width" ) );
-            
-            debugLog() << "Settings: Scale=" << scale << ", TubeLength=" << tubeLength << ", RingSize=" << ringRelSize << std::endl;
-            
+            bool showTube = options.get< bool >( "Show Tube" );
+            bool showMembrane = options.get< bool >( "Show Membrane" );
+            bool showLens = options.get< bool >( "Show Lens" );
+            bool colorByProbeId = options.get< bool >( "Color by Probe ID" );
             const auto& points = pointSet->points();
             size_t numPoints = points.size();
 
-            // First pass: get max velocity for length scaling
             double maxVel = 0.0;
             for( size_t i = 0; i < numPoints && i < velFunc->values().size(); ++i )
             {
                 double vLen = norm( velFunc->values()[i] );
                 if( vLen > maxVel ) maxVel = vLen;
             }
-            if( maxVel < 1e-9 ) maxVel = 1.0; // avoid div by zero
+            if( maxVel < 1e-9 ) maxVel = 1.0;
 
-            std::vector< PointF< 3 > > vertices;
-            std::vector< Color > colors;
-            std::vector< unsigned int > indices;
+            constexpr double kappaEps = 1e-6;
+            const int arcSegs = 16;
+            const int tubeCirc = 10;
+            const int paraboloidRings = 6;
+            const int paraboloidSegs = 12;
+
+            std::vector< PointF< 3 > > lineVerts;
+            std::vector< Color > lineColors;
+            std::vector< unsigned int > lineIndices;
+            std::vector< PointF< 3 > > triVerts;
+            std::vector< VectorF< 3 > > triNormals;
+            std::vector< Color > triColors;
+            std::vector< unsigned int > triIndices;
 
             for( size_t i = 0; i < numPoints; ++i )
             {
                 if( abortFlag ) break;
                 Point3 p = points[i];
-
-                // 1. Get Velocity
                 if( i >= velFunc->values().size() ) continue;
                 Vector3 v = velFunc->values()[i];
                 double vLen = norm( v );
                 if( vLen < kMinDirectionNorm ) continue;
 
-                // Tube length proportional to velocity magnitude (stronger flow = longer tube)
                 double dt = scale * tubeLength * ( vLen / maxVel );
-
-                // 2. Get Acceleration (if available)
-                Vector3 a(0,0,0);
+                Vector3 a( 0, 0, 0 );
                 if( accFunc && i < accFunc->values().size() ) a = accFunc->values()[i];
-
-                // 3. Get Gradient (if available)
-                Tensor< double, 3, 3 > J({0,0,0,0,0,0,0,0,0}); // Zero matrix
+                Tensor< double, 3, 3 > J( { 0,0,0, 0,0,0, 0,0,0 } );
                 if( gradFunc && i < gradFunc->values().size() ) J = gradFunc->values()[i];
-
-                // 4. Get Divergence (if available)
                 double div = 0.0;
                 if( divFunc && i < divFunc->values().size() ) div = divFunc->values()[i];
+                Vector3 c = ( curvFunc && i < curvFunc->values().size() ) ? curvFunc->values()[i] : computeCurvature( v, a );
 
-                // --- Geometry Construction ---
+                double divSat = std::tanh( div * 5.0 );
+                Color divColor = ( divSat > 0 ) ? Color( 1.0f, 1.0f - (float)divSat, 1.0f - (float)divSat )
+                                                : Color( 1.0f + (float)divSat, 1.0f + (float)divSat, 1.0f );
+                Color lineColor = colorByProbeId ? probeColor( i ) : divColor;
+                Color baseColor = colorByProbeId ? lineColor : divColor;
+                Vector3 curlVec = computeRotation( J );
+                double torsionProxy = ( vLen > 1e-12 ) ? ( curlVec * v ) / vLen : 0.0;
 
-                // A. Curved Tube (Streamline Segment)
-                // x(t) = p + v*t + 0.5*a*t^2; dt already set above (scaled by magnitude)
-                
-                int segments = 10;
-                Point3 prevPos = p;
-                
-                // Color Map: Blue (neg) -> Grey (0) -> Red (pos)
-                double divSat = std::tanh( div * 5.0 ); 
-                Color baseColor = ( divSat > 0 ) ? Color( 1.0, 1.0 - divSat, 1.0 - divSat ) 
-                                                 : Color( 1.0 + divSat, 1.0 + divSat, 1.0 );
-
-                // Draw Curve
-                for( int s = 1; s <= segments; ++s )
+                Vector3 T = normalized( v );
+                double kappa = norm( c );
+                double L = vLen * dt;
+                std::vector< Point3 > arcPoints;
+                if( kappa < kappaEps || L < 1e-12 )
                 {
-                    double t = (double)s / segments * dt;
-                    Point3 currPos = p + v * t + a * ( 0.5 * t * t );
-
-                    size_t idx = vertices.size();
-                    vertices.push_back( toPointF( prevPos ) );
-                    vertices.push_back( toPointF( currPos ) );
-                    colors.push_back( baseColor );
-                    colors.push_back( baseColor );
-                    indices.push_back( idx );
-                    indices.push_back( idx + 1 );
-
-                    prevPos = currPos;
+                    arcPoints.push_back( p );
+                    arcPoints.push_back( p + T * L );
                 }
-                Point3 tipPos = prevPos;
-                Vector3 tipDir = normalized( v + a * dt ); // Tangent at end
-                double drawLen = norm( tipPos - p );      // Actual tube length for arrow head
-
-                // B. Arrow Head (proportional to tube length so it stays visible)
+                else
                 {
-                    double headSize = std::max( drawLen * 0.25, scale * 0.05 ); // 25% of tube or min size
-                    double headRadius = headSize * 0.5;
-                    
-                    Vector3 up( 0, 0, 1 );
-                    if( std::abs( tipDir[2] ) > 0.9 ) up = Vector3( 0, 1, 0 );
-                    Vector3 right = normalized( cross( tipDir, up ) );
-                    up = normalized( cross( right, tipDir ) );
-                    
-                    Point3 base = tipPos - tipDir * headSize;
-                    
-                    for( int k = 0; k < 8; ++k ) 
+                    double R = 1.0 / kappa;
+                    Vector3 N = normalized( c );
+                    Point3 center = p + R * N;
+                    double thetaMax = L / R;
+                    for( int s = 0; s <= arcSegs; ++s )
                     {
-                        double ang = k * M_PI / 4.0;
-                        Vector3 off = ( right * std::cos(ang) + up * std::sin(ang) ) * headRadius;
-                        size_t hIdx = vertices.size();
-                        vertices.push_back( toPointF( tipPos ) );
-                        vertices.push_back( toPointF( base + off ) );
-                        colors.push_back( baseColor );
-                        colors.push_back( baseColor );
-                        indices.push_back( hIdx );
-                        indices.push_back( hIdx + 1 );
+                        double theta = ( s * thetaMax ) / arcSegs;
+                        arcPoints.push_back( center + R * ( -std::cos( theta ) * N + std::sin( theta ) * T ) );
                     }
                 }
+                Point3 tipPos = arcPoints.back();
+                Vector3 tipDir = ( arcPoints.size() >= 2 )
+                    ? normalized( arcPoints.back() - arcPoints[ arcPoints.size() - 2 ] ) : T;
+                double drawLen = L;
 
-                // C. Ring at Base (Shear/Deformation)
-                // We start with a circle perpendicular to v.
-                // We deform it using the Gradient Tensor J.
-                // r_new = r + J * r * dt (Linearized deformation)
+                for( size_t s = 0; s + 1 < arcPoints.size(); ++s )
                 {
-                    double ringRad = scale * ringRelSize; 
-                    Vector3 dir = normalized( v );
-                    Vector3 up( 0, 0, 1 );
-                    if( std::abs( dir[2] ) > 0.9 ) up = Vector3( 0, 1, 0 );
-                    Vector3 right = normalized( cross( dir, up ) );
-                    up = normalized( cross( right, dir ) );
-                    
-                    int ringSegs = 20;
-                    Point3 ringCenter = p; // Center at probe origin
-                    
-                    Color ringColor( 0.2, 0.2, 0.2 ); // Dark grey
-                    
-                    // Function to deform point: p' = p + J*(p-center)*dt
-                    auto deform = [&]( const Point3& pt ) {
-                        Vector3 r = pt - ringCenter;
-                        Vector3 displacement = J * r * (dt * 0.5); // Deform over half time step for ring
-                        return pt + displacement;
-                    };
+                    size_t idx = lineVerts.size();
+                    lineVerts.push_back( toPointF( arcPoints[s] ) );
+                    lineVerts.push_back( toPointF( arcPoints[s + 1] ) );
+                    lineColors.push_back( lineColor );
+                    lineColors.push_back( lineColor );
+                    lineIndices.push_back( (unsigned int)idx );
+                    lineIndices.push_back( (unsigned int)idx + 1 );
+                }
 
-                    Point3 firstPt = ringCenter + right * ringRad;
-                    Point3 prevRingPt = gradFunc ? deform(firstPt) : firstPt;
+                double headSize = std::max( drawLen * 0.25, scale * 0.05 );
+                double headRad = headSize * 0.5;
+                Vector3 up( 0, 0, 1 );
+                if( std::abs( tipDir[2] ) > 0.9 ) up = Vector3( 0, 1, 0 );
+                Vector3 right = normalized( cross( tipDir, up ) );
+                up = normalized( cross( right, tipDir ) );
+                Point3 base = tipPos - tipDir * headSize;
+                for( int k = 0; k < 8; ++k )
+                {
+                    double ang = k * M_PI / 4.0;
+                    Vector3 off = ( right * std::cos( ang ) + up * std::sin( ang ) ) * headRad;
+                    size_t hIdx = lineVerts.size();
+                    lineVerts.push_back( toPointF( tipPos ) );
+                    lineVerts.push_back( toPointF( base + off ) );
+                    lineColors.push_back( lineColor );
+                    lineColors.push_back( lineColor );
+                    lineIndices.push_back( (unsigned int)hIdx );
+                    lineIndices.push_back( (unsigned int)hIdx + 1 );
+                }
 
-                    for( int k = 1; k <= ringSegs; ++k )
+                double ringRad = scale * ringRelSize;
+                Vector3 dir = normalized( v );
+                Vector3 ringUp( 0, 0, 1 );
+                if( std::abs( dir[2] ) > 0.9 ) ringUp = Vector3( 0, 1, 0 );
+                Vector3 ringRight = normalized( cross( dir, ringUp ) );
+                ringUp = normalized( cross( ringRight, dir ) );
+                if( kappa >= kappaEps ) { ringRight = normalized( cross( dir, c ) ); ringUp = normalized( cross( ringRight, dir ) ); }
+                Point3 ringCenter = p;
+                Color ringColor = colorByProbeId ? lineColor : Color( 0.2f, 0.2f, 0.2f );
+                auto deform = [&]( const Point3& pt ) {
+                    Vector3 r = pt - ringCenter;
+                    return pt + J * r * ( dt * 0.5 );
+                };
+                int ringSegs = 20;
+                Point3 prevRingPt = ringCenter + ringRight * ringRad;
+                if( gradFunc ) prevRingPt = deform( prevRingPt );
+                for( int k = 1; k <= ringSegs; ++k )
+                {
+                    double ang = k * 2.0 * M_PI / ringSegs;
+                    Point3 currPt = ringCenter + ( ringRight * std::cos( ang ) + ringUp * std::sin( ang ) ) * ringRad;
+                    if( gradFunc ) currPt = deform( currPt );
+                    size_t rIdx = lineVerts.size();
+                    lineVerts.push_back( toPointF( prevRingPt ) );
+                    lineVerts.push_back( toPointF( currPt ) );
+                    lineColors.push_back( ringColor );
+                    lineColors.push_back( ringColor );
+                    lineIndices.push_back( (unsigned int)rIdx );
+                    lineIndices.push_back( (unsigned int)rIdx + 1 );
+                    prevRingPt = currPt;
+                }
+
+                double tubeRad = std::max( drawLen * 0.04, scale * 0.02 );
+                size_t tubeBaseIdx = triVerts.size();
+                double arcLenSoFar = 0.0;
+                if( showTube )
+                {
+                for( size_t s = 0; s < arcPoints.size(); ++s )
+                {
+                    Vector3 tangent = ( s + 1 < arcPoints.size() )
+                        ? normalized( arcPoints[s + 1] - arcPoints[s] )
+                        : ( s > 0 ? normalized( arcPoints[s] - arcPoints[s - 1] ) : T );
+                    Vector3 tu( 0, 0, 1 );
+                    if( std::abs( tangent[2] ) > 0.9 ) tu = Vector3( 0, 1, 0 );
+                    Vector3 tx = normalized( cross( tangent, tu ) );
+                    Vector3 ty = normalized( cross( tx, tangent ) );
+                    for( int k = 0; k <= tubeCirc; ++k )
                     {
-                        double ang = k * 2.0 * M_PI / ringSegs;
-                        Point3 currPt = ringCenter + ( right * std::cos(ang) + up * std::sin(ang) ) * ringRad;
-                        
-                        // Apply deformation if Gradient is available
-                        Point3 defPt = gradFunc ? deform(currPt) : currPt;
-                        
-                        size_t rIdx = vertices.size();
-                        vertices.push_back( toPointF( prevRingPt ) );
-                        vertices.push_back( toPointF( defPt ) );
-                        colors.push_back( ringColor );
-                        colors.push_back( ringColor );
-                        indices.push_back( rIdx );
-                        indices.push_back( rIdx + 1 );
-                        
-                        prevRingPt = defPt;
+                        double phi = k * 2.0 * M_PI / tubeCirc;
+                        Point3 pt = arcPoints[s] + ( tx * std::cos( phi ) + ty * std::sin( phi ) ) * tubeRad;
+                        triVerts.push_back( toPointF( pt ) );
+                        Vector3 n = normalized( tx * std::cos( phi ) + ty * std::sin( phi ) );
+                        triNormals.push_back( VectorF<3>( (float)n[0], (float)n[1], (float)n[2] ) );
+                        float stripe = 0.5f + 0.5f * std::cos( (float)( phi + torsionProxy * arcLenSoFar * 2.0 ) );
+                        triColors.push_back( Color( stripe * baseColor.r(), stripe * baseColor.g(), stripe * baseColor.b(), 1.0f ) );
                     }
+                    if( s + 1 < arcPoints.size() ) arcLenSoFar += norm( arcPoints[s + 1] - arcPoints[s] );
+                }
+                for( size_t s = 0; s + 1 < arcPoints.size(); ++s )
+                {
+                    for( int k = 0; k < tubeCirc; ++k )
+                    {
+                        int k1 = ( k + 1 ) % ( tubeCirc + 1 );
+                        unsigned int i00 = (unsigned int)( tubeBaseIdx + s * ( tubeCirc + 1 ) + k );
+                        unsigned int i01 = (unsigned int)( tubeBaseIdx + s * ( tubeCirc + 1 ) + k1 );
+                        unsigned int i10 = (unsigned int)( tubeBaseIdx + ( s + 1 ) * ( tubeCirc + 1 ) + k );
+                        unsigned int i11 = (unsigned int)( tubeBaseIdx + ( s + 1 ) * ( tubeCirc + 1 ) + k1 );
+                        triIndices.push_back( i00 ); triIndices.push_back( i01 ); triIndices.push_back( i10 );
+                        triIndices.push_back( i01 ); triIndices.push_back( i11 ); triIndices.push_back( i10 );
+                    }
+                }
+                }
+
+                double aAlongU = ( vLen > 1e-12 ) ? ( a * v ) / vLen : 0.0;
+                if( showMembrane )
+                {
+                double memRad = scale * ringRelSize * 0.8;
+                int memSegs = 16;
+                size_t memBase = triVerts.size();
+                double bulge = 0.15 * scale * std::tanh( aAlongU * 2.0 );
+                triVerts.push_back( toPointF( tipPos + tipDir * bulge ) );
+                triNormals.push_back( VectorF<3>( (float)tipDir[0], (float)tipDir[1], (float)tipDir[2] ) );
+                triColors.push_back( baseColor );
+                for( int k = 0; k <= memSegs; ++k )
+                {
+                    double ang = k * 2.0 * M_PI / memSegs;
+                    Point3 pt = tipPos + ( right * std::cos( ang ) + up * std::sin( ang ) ) * memRad;
+                    triVerts.push_back( toPointF( pt ) );
+                    Vector3 n = normalized( -tipDir );
+                    triNormals.push_back( VectorF<3>( (float)n[0], (float)n[1], (float)n[2] ) );
+                    triColors.push_back( baseColor );
+                }
+                for( int k = 0; k < memSegs; ++k )
+                {
+                    triIndices.push_back( (unsigned int)memBase );
+                    triIndices.push_back( (unsigned int)( memBase + k + 1 ) );
+                    triIndices.push_back( (unsigned int)( memBase + ( k + 2 <= memSegs + 1 ? k + 2 : 1 ) ) );
+                }
+                }
+
+                if( showLens )
+                {
+                double lensRad = scale * ringRelSize;
+                double kDiv = 0.08 * scale * std::tanh( div * 3.0 );
+                size_t lensBase = triVerts.size();
+                triVerts.push_back( toPointF( p ) );
+                triNormals.push_back( VectorF<3>( (float)dir[0], (float)dir[1], (float)dir[2] ) );
+                triColors.push_back( baseColor );
+                for( int r = 1; r <= paraboloidRings; ++r )
+                {
+                    double rad = ( r * lensRad ) / paraboloidRings;
+                    double z = kDiv * ( rad * rad ) / ( lensRad * lensRad + 1e-12 );
+                    for( int seg = 0; seg < paraboloidSegs; ++seg )
+                    {
+                        double ang = seg * 2.0 * M_PI / paraboloidSegs;
+                        Point3 pt = p + ( ringRight * std::cos( ang ) + ringUp * std::sin( ang ) ) * rad + dir * z;
+                        triVerts.push_back( toPointF( pt ) );
+                        double dzdr = ( lensRad > 1e-12 && rad > 1e-12 ) ? ( 2.0 * kDiv * rad / ( lensRad * lensRad ) ) : 0.0;
+                        Vector3 radial = normalized( ringRight * std::cos( ang ) + ringUp * std::sin( ang ) );
+                        Vector3 n = ( rad > 1e-12 ) ? normalized( radial - dir * dzdr ) : dir;
+                        triNormals.push_back( VectorF<3>( (float)n[0], (float)n[1], (float)n[2] ) );
+                        triColors.push_back( baseColor );
+                    }
+                }
+                for( int seg = 0; seg < paraboloidSegs; ++seg )
+                {
+                    int seg1 = ( seg + 1 ) % paraboloidSegs;
+                    triIndices.push_back( (unsigned int)lensBase );
+                    triIndices.push_back( (unsigned int)( lensBase + 1 + seg ) );
+                    triIndices.push_back( (unsigned int)( lensBase + 1 + seg1 ) );
+                }
+                for( int r = 0; r < paraboloidRings - 1; ++r )
+                {
+                    for( int seg = 0; seg < paraboloidSegs; ++seg )
+                    {
+                        int seg1 = ( seg + 1 ) % paraboloidSegs;
+                        unsigned int a0 = (unsigned int)( lensBase + 1 + r * paraboloidSegs + seg );
+                        unsigned int a1 = (unsigned int)( lensBase + 1 + r * paraboloidSegs + seg1 );
+                        unsigned int b0 = (unsigned int)( lensBase + 1 + ( r + 1 ) * paraboloidSegs + seg );
+                        unsigned int b1 = (unsigned int)( lensBase + 1 + ( r + 1 ) * paraboloidSegs + seg1 );
+                        triIndices.push_back( a0 ); triIndices.push_back( a1 ); triIndices.push_back( b0 );
+                        triIndices.push_back( a1 ); triIndices.push_back( b1 ); triIndices.push_back( b0 );
+                    }
+                }
                 }
             }
-            
-            debugLog() << "Max Velocity Magnitude: " << maxVel << std::endl;
-            debugLog() << "Generated Geometry: " << vertices.size() << " vertices." << std::endl;
 
             auto const& system = graphics::GraphicsSystem::instance();
             std::string resourcePath = PluginRegistrationService::getInstance().getResourcePath( "utils/Graphics" );
-            
-            // multiColor line shader requires vertex → geometry → fragment (gColor → fColor)
-            debugLog() << "Loading line shader (vertex + geometry + fragment)..." << std::endl;
-            
-             auto drawable = system.makePrimitive(
-                graphics::PrimitiveConfig{ graphics::RenderPrimitives::LINES }
-                    .vertexBuffer( "in_vertex", system.makeBuffer( vertices ) )
-                    .vertexBuffer( "in_color", system.makeBuffer( colors ) )
-                    .indexBuffer( system.makeIndexBuffer( indices ) )
-                    .boundingSphere( graphics::computeBoundingSphere( vertices ) )
-                    .uniform( "u_lineWidth", static_cast< float >( lineWidthOpt ) ),
-                system.makeProgramFromFiles( resourcePath + "shader/line/noShading/multiColor/vertex.glsl",
-                                             resourcePath + "shader/line/noShading/multiColor/fragment.glsl",
-                                             resourcePath + "shader/line/noShading/multiColor/geometry.glsl" )
-            );
-            setGraphics( "Flow Probes", drawable );
-            debugLog() << "Finished FlowProbeRenderer." << std::endl;
+            if( !resourcePath.empty() && resourcePath.back() != '/' ) resourcePath += "/";
+
+            std::vector< std::shared_ptr< graphics::Drawable > > drawables;
+            if( !lineVerts.empty() )
+            {
+                auto lineProg = system.makeProgramFromFiles(
+                    resourcePath + "shader/line/noShading/multiColor/vertex.glsl",
+                    resourcePath + "shader/line/noShading/multiColor/fragment.glsl",
+                    resourcePath + "shader/line/noShading/multiColor/geometry.glsl" );
+                auto lineDraw = system.makePrimitive(
+                    graphics::PrimitiveConfig{ graphics::RenderPrimitives::LINES }
+                        .vertexBuffer( "in_vertex", system.makeBuffer( lineVerts ) )
+                        .vertexBuffer( "in_color", system.makeBuffer( lineColors ) )
+                        .indexBuffer( system.makeIndexBuffer( lineIndices ) )
+                        .boundingSphere( graphics::computeBoundingSphere( lineVerts ) )
+                        .uniform( "u_lineWidth", static_cast< float >( lineWidthOpt ) ),
+                    lineProg );
+                drawables.push_back( lineDraw );
+            }
+            if( !triVerts.empty() )
+            {
+                auto triProg = system.makeProgramFromFiles(
+                    resourcePath + "shader/surface/phong/multiColor/vertex.glsl",
+                    resourcePath + "shader/surface/phong/multiColor/fragment.glsl" );
+                auto triDraw = system.makePrimitive(
+                    graphics::PrimitiveConfig{ graphics::RenderPrimitives::TRIANGLES }
+                        .vertexBuffer( "position", system.makeBuffer( triVerts ) )
+                        .vertexBuffer( "normal", system.makeBuffer( triNormals ) )
+                        .vertexBuffer( "color", system.makeBuffer( triColors ) )
+                        .indexBuffer( system.makeIndexBuffer( triIndices ) )
+                        .boundingSphere( graphics::computeBoundingSphere( triVerts ) ),
+                    triProg );
+                drawables.push_back( triDraw );
+            }
+            if( drawables.empty() ) { clearGraphics( "Flow Probes" ); return; }
+            setGraphics( "Flow Probes", graphics::makeCompound( drawables ) );
         }
     };
 

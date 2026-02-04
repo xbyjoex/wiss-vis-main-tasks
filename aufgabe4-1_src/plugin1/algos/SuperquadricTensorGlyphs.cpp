@@ -1,6 +1,4 @@
-// JP, 01/2025 - Aufgabe 4.1: Superquadric Tensor Glyphs
-// Tensorfeld-Visualisierung nach Kindlmann (2004) mit Superquadric-Geometrie
-// Getrennte Berechnung (DataAlgorithm) und Visualisierung (VisAlgorithm)
+// Superquadric tensor glyphs (Kindlmann 2004). DataAlgorithm + VisAlgorithm.
 
 #include <algorithm>
 #include <cmath>
@@ -25,16 +23,10 @@ namespace aufgabe4_1
 
     namespace
     {
-        // Minimum eigenvalue threshold
         constexpr double kMinEigenvalue = 1e-12;
-        constexpr double kDefaultGamma = 1.0;
+        constexpr double kDefaultGamma = 2.5;
 
-        struct WestinMetrics
-        {
-            double c_l; // Linearität
-            double c_p; // Planarität
-            double c_s; // Sphärizität
-        };
+        struct WestinMetrics { double c_l, c_p, c_s; };
 
         struct FormParameters
         {
@@ -53,17 +45,10 @@ namespace aufgabe4_1
         {
             if( useKindlmann )
             {
-                // Original Kindlmann (2004) Logic
-                // Produces sharp/boxy shapes for anisotropy
                 if( c_l >= c_p ) return { std::pow( 1.0 - c_p, gamma ), std::pow( 1.0 - c_l, gamma ) };
                 return { std::pow( 1.0 - c_l, gamma ), std::pow( 1.0 - c_p, gamma ) };
             }
-            else
-            {
-                // Round/Ellipsoid Logic (User Preference)
-                // Enforces round cross-section (beta=1)
-                return { std::pow( c_s, gamma ), 1.0 };
-            }
+            return { std::pow( c_s, gamma ), 1.0 };
         }
 
         inline double sgn( double x ) { return x >= 0.0 ? 1.0 : -1.0; }
@@ -104,10 +89,6 @@ namespace aufgabe4_1
         VectorF<3> toVectorF( const Vector3& v ) { return VectorF<3>( (float)v[0], (float)v[1], (float)v[2] ); }
     }
 
-    // ==========================================================================================
-    // ALGORITHM 1: Calculation (DataAlgorithm)
-    // Generates the Glyph Mesh, Color Field, and Normal Field
-    // ==========================================================================================
     class SuperquadricTensorGlyphs : public DataAlgorithm
     {
     public:
@@ -117,8 +98,8 @@ namespace aufgabe4_1
             {
                 add< Field< 3, Matrix< 3 > > >( "Tensor Field", "Input tensor field", Options::REQUIRED );
                 add< double >( "Glyph Scale", "Scaling factor", 1.0 );
-                add< double >( "Sharpness Parameter γ", "Gamma (1.0 = Ellipsoids, >2.0 = Superquadrics)", kDefaultGamma );
-                add< bool >( "Use Kindlmann Shape", "If true, uses original Kindlmann equations (boxier). If false, forces round shapes.", false );
+                add< double >( "Sharpness Parameter γ", "Edge sharpness (paper: ~2–3)", kDefaultGamma );
+                add< bool >( "Use Kindlmann Shape", "Paper shape (alpha/beta from anisotropy); off = round cross-section", true );
                 add< int >( "Resolution Theta", "Theta resolution", 20 );
                 add< int >( "Resolution Phi", "Phi resolution", 20 );
                 add< int >( "Sample Count", "Grid sampling resolution", 10 );
@@ -256,10 +237,7 @@ namespace aufgabe4_1
                 Vector3 v2 = eigenPairs[1].second;
                 Vector3 v3 = eigenPairs[2].second;
 
-                // Fix eigenvector handedness (ensure right-handed system)
-                // v3 should be v1 x v2
-                // But eigenvectors are unique up to sign. 
-                // We enforce a consistent frame:
+                // Right-handed frame
                 v1 = normalized( v1 );
                 v2 = normalized( v2 - ( v2 * v1 ) * v1 ); // Gram-Schmidt to ensure orthogonality
                 v3 = normalized( cross( v1, v2 ) );
@@ -281,15 +259,15 @@ namespace aufgabe4_1
                         Vector3 unitNorm = superquadricNormal( theta, phi, fp.alpha, fp.beta );
                         unitNorm = normalized( unitNorm );
 
-                        // Align l1 with Z (Superquadric main axis), l2 with X, l3 with Y
-                        Vector3 scaledPos( l2 * unitPos[0], l3 * unitPos[1], l1 * unitPos[2] );
+                // Unit superquadric z-axis → principal eigenvector; scale by eigenvalues
+                Vector3 scaledPos( l2 * unitPos[0], l3 * unitPos[1], l1 * unitPos[2] );
                         Vector3 scaledNorm( 
                             ( l2 > 1e-9 ) ? unitNorm[0] / l2 : unitNorm[0],
                             ( l3 > 1e-9 ) ? unitNorm[1] / l3 : unitNorm[1],
                             ( l1 > 1e-9 ) ? unitNorm[2] / l1 : unitNorm[2]
                         );
 
-                        // Rotate: X->v2, Y->v3, Z->v1
+                        // Rotate into eigenframe (Z→v1)
                         Vector3 rotPos = scaledPos[0] * v2 + scaledPos[1] * v3 + scaledPos[2] * v1;
                         Vector3 rotNorm = scaledNorm[0] * v2 + scaledNorm[1] * v3 + scaledNorm[2] * v1;
 
@@ -355,10 +333,6 @@ namespace aufgabe4_1
         "Berechnet Superquadric-Glyphen Geometrie, Farbe und Normalen." );
 
 
-    // ==========================================================================================
-    // ALGORITHM 2: Visualization (VisAlgorithm)
-    // Renders the Glyphs using the Mesh, Color, and Normals
-    // ==========================================================================================
     class SuperquadricGlyphRenderer : public VisAlgorithm
     {
     public:
@@ -384,6 +358,7 @@ namespace aufgabe4_1
 
         void execute( const Algorithm::Options& options, const volatile bool& abortFlag ) override
         {
+            (void)abortFlag;
             debugLog() << "Starting Superquadric Rendering..." << std::endl;
             auto grid = options.get< Grid< 3 > >( "Grid" );
             if( !grid ) { 
